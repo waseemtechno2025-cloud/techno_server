@@ -499,40 +499,43 @@ app.put('/api/users/:id', async (req, res) => {
 // DELETE route to delete a user
 app.delete('/api/users/:id', async (req, res) => {
   try {
-    const userId = req.params.id;
+    // Validate ObjectId format
+    if (!ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user ID format'
+      });
+    }
 
-   
-
-    // Delete the user
-    const result = await usersCollection.deleteOne({ userName: userName });
-
+    const userId = new ObjectId(req.params.id);
+    
+    // First delete all vouchers for this user
+    const vouchersResult = await vouchersCollection.deleteMany({ userId: req.params.id });
+    console.log(`Deleted ${vouchersResult.deletedCount} vouchers for user ${req.params.id}`);
+    
+    // Then delete the user
+    const result = await usersCollection.deleteOne({ _id: userId });
     if (result.deletedCount === 0) {
       return res.status(404).json({
         success: false,
         message: 'User not found'
       });
     }
-
-    // Also delete all vouchers for this user
-    const voucherResult = await vouchersCollection.deleteMany({ userName: userName });
-
-    console.log(`🧾 Deleted ${voucherResult.deletedCount} vouchers for user ${userName}`);
-
+    
     res.status(200).json({
       success: true,
-      message: `User and ${voucherResult.deletedCount} related voucher(s) deleted successfully`
+      message: 'User and associated vouchers deleted successfully',
+      deletedVouchersCount: vouchersResult.deletedCount
     });
-
   } catch (error) {
-    console.error('Error deleting user and vouchers:', error);
+    console.error('Error deleting user:', error);
     res.status(500).json({
       success: false,
-      message: 'Error deleting user and vouchers',
+      message: 'Error deleting user',
       error: error.message
     });
   }
 });
-
 
 // ============ PACKAGES API ROUTES ============
 
