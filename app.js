@@ -983,7 +983,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
     
     // Total income (sum of all paidAmount from users)
     const allUsers = await usersCollection.find({}).toArray();
-    const totalIncome = allUsers.reduce((sum, user) => sum + (user.paidAmount || 0), 0);
+    const totalIncome = allUsers.reduce((sum, user) => sum + Number(user.paidAmount || 0), 0);
     
     // Total expense
     const expenseResult = await transactionsCollection.aggregate([
