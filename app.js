@@ -1126,38 +1126,70 @@ app.get('/api/balances', async (req, res) => {
 app.get('/api/users/expiring-soon', async (req, res) => {
   try {
     const usersCollection = db.collection('users');
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
-    // Calculate tomorrow's date
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const endOfTomorrow = new Date(tomorrow);
-    endOfTomorrow.setHours(23, 59, 59, 999);
-    
-    // Find users who are paid/partial and expiring TOMORROW (exclude inactive)
-    const users = await usersCollection.find({
+    // Establish date-only bounds in local time
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const tomorrowStart = new Date(todayStart);
+    tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+    const tomorrowEnd = new Date(tomorrowStart);
+    tomorrowEnd.setHours(23, 59, 59, 999);
+
+    // Fetch paid/partial and non-inactive users, filter expiry by JS to support string dates
+    const usersAll = await usersCollection.find({
       status: { $in: ['paid', 'partial'] },
-      expiryDate: { 
-        $gte: tomorrow.toISOString(), 
-        $lte: endOfTomorrow.toISOString() 
-      },
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
       ]
-    }).sort({ expiryDate: 1 }).toArray();
-    
-    // Calculate days left
-    const now = new Date();
-    const usersWithDaysLeft = users.map(user => ({
-      ...user,
-      daysLeft: Math.ceil((new Date(user.expiryDate) - now) / (1000 * 60 * 60 * 24))
-    }));
-    
+    }).toArray();
+
+    // Helper to parse expiryDate stored as Date or 'DD-MM-YYYY' string
+    const parseExpiry = (exp) => {
+      if (!exp) return null;
+      if (exp instanceof Date) {
+        return new Date(exp.getFullYear(), exp.getMonth(), exp.getDate());
+      }
+      if (typeof exp === 'string') {
+        const parts = exp.split('-');
+        if (parts.length === 3) {
+          const [dd, mm, yyyy] = parts;
+          const d = parseInt(dd, 10);
+          const m = parseInt(mm, 10);
+          const y = parseInt(yyyy, 10);
+          if (!isNaN(d) && !isNaN(m) && !isNaN(y)) {
+            return new Date(y, m - 1, d);
+          }
+        }
+        const d2 = new Date(exp);
+        if (!isNaN(d2.getTime())) {
+          return new Date(d2.getFullYear(), d2.getMonth(), d2.getDate());
+        }
+        return null;
+      }
+      return null;
+    };
+
+    const filtered = usersAll
+      .map(u => ({ u, expDate: parseExpiry(u.expiryDate) }))
+      .filter(({ expDate }) => expDate && expDate >= tomorrowStart && expDate <= tomorrowEnd)
+      .sort((a, b) => a.expDate.getTime() - b.expDate.getTime());
+
+    // Calculate days left from date-only midnight
+    const msPerDay = 24 * 60 * 60 * 1000;
+    const usersWithDaysLeft = filtered.map(({ u, expDate }) => {
+      const expMid = new Date(expDate.getFullYear(), expDate.getMonth(), expDate.getDate()).getTime();
+      const todayMid = todayStart.getTime();
+      const daysLeft = Math.round((expMid - todayMid) / msPerDay);
+      return {
+        ...u,
+        expiryDate: expDate.toISOString(),
+        daysLeft
+      };
+    });
+
     res.status(200).json({
       success: true,
-      count: users.length,
+      count: usersWithDaysLeft.length,
       data: usersWithDaysLeft
     });
   } catch (error) {
