@@ -324,17 +324,38 @@ app.post('/api/users', async (req, res) => {
       });
     }
 
+    // Calculate total amount based on numberOfMonths
+    const packageFeePerMonth = parseFloat(amount) || 0;
+    const discountPerMonth = parseFloat(discount) || 0;
+    const monthlyFeeAfterDiscount = packageFeePerMonth - discountPerMonth;
+    const totalAmountForAllMonths = monthlyFeeAfterDiscount * (numberOfMonths || 1);
+    
+    console.log('💰 User Payment Calculation:', {
+      packageFeePerMonth,
+      discountPerMonth,
+      monthlyFeeAfterDiscount,
+      numberOfMonths,
+      totalAmountForAllMonths,
+      paymentType
+    });
+    
     // Determine payment status based on paymentType
     let paymentStatus = 'unpaid'; // Default for "Pay Later"
     let paidAmount = 0;
-    let remainingAmount = amount || 0;
+    let remainingAmount = totalAmountForAllMonths;
     
     if (paymentType === 'now') {
-      // For "Pay Now", status will be updated when voucher is created
-      paymentStatus = 'paid'; // Set to paid since payment will be made immediately
-      paidAmount = amount || 0;
-      remainingAmount = 0;
+      // For "Pay Now", first month is paid, remaining months are pending
+      paymentStatus = numberOfMonths > 1 ? 'partial' : 'paid';
+      paidAmount = monthlyFeeAfterDiscount; // Only first month paid
+      remainingAmount = totalAmountForAllMonths - monthlyFeeAfterDiscount; // Remaining months
     }
+    
+    console.log('📊 Final Payment Status:', {
+      paymentStatus,
+      paidAmount,
+      remainingAmount
+    });
 
     const newUser = {
       userName: userName.trim(),
@@ -343,7 +364,9 @@ app.post('/api/users', async (req, res) => {
       whatsappNo: whatsappNo ? whatsappNo.trim() : '',
       packageName: packageName || '',
       discount: discount || 0,
-      amount: amount || 0,
+      amount: amount || 0, // Single month package fee
+      totalAmount: totalAmountForAllMonths, // Total for all months
+      numberOfMonths: numberOfMonths || 1,
       connectionType: connectionType || 'Local',
       streetName: streetName || '',
       switchSplitter: switchSplitter ? switchSplitter.trim() : '',
