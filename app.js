@@ -1044,18 +1044,61 @@ app.get('/api/dashboard/stats', async (req, res) => {
 app.get('/api/users/paid', async (req, res) => {
   try {
     const usersCollection = db.collection('users');
-    const users = await usersCollection.find({
+
+    // PKT midnight for today
+    const PKT_OFFSET_MIN = 5 * 60;
+    const nowUTC = new Date();
+    const pktNow = new Date(nowUTC.getTime() + PKT_OFFSET_MIN * 60000);
+    const y = pktNow.getUTCFullYear();
+    const m = pktNow.getUTCMonth();
+    const d = pktNow.getUTCDate();
+    const todayPKTMidUTC = Date.UTC(y, m, d) - PKT_OFFSET_MIN * 60000;
+
+    const allPaid = await usersCollection.find({
       status: 'paid',
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
       ]
-    }).sort({ createdAt: -1 }).toArray();
-    
+    }).toArray();
+
+    const toMidUTC = (exp) => {
+      if (!exp) return null;
+      if (exp instanceof Date) {
+        const pkt = new Date(exp.getTime() + PKT_OFFSET_MIN * 60000);
+        return Date.UTC(pkt.getUTCFullYear(), pkt.getUTCMonth(), pkt.getUTCDate()) - PKT_OFFSET_MIN * 60000;
+      }
+      if (typeof exp === 'string') {
+        const parts = exp.split('-');
+        if (parts.length === 3) {
+          const [dd, mm, yyyy] = parts;
+          const day = parseInt(dd, 10);
+          const mon = parseInt(mm, 10) - 1;
+          const yr = parseInt(yyyy, 10);
+          if (!isNaN(day) && !isNaN(mon) && !isNaN(yr)) {
+            return Date.UTC(yr, mon, day); // date-only
+          }
+        }
+        const d2 = new Date(exp);
+        if (!isNaN(d2.getTime())) {
+          const pkt = new Date(d2.getTime() + PKT_OFFSET_MIN * 60000);
+          return Date.UTC(pkt.getUTCFullYear(), pkt.getUTCMonth(), pkt.getUTCDate()) - PKT_OFFSET_MIN * 60000;
+        }
+        return null;
+      }
+      return null;
+    };
+
+    // Keep users whose expiry is null OR after today (strictly > today)
+    const activePaid = allPaid.filter(u => {
+      const mid = toMidUTC(u.expiryDate);
+      return mid === null || mid > todayPKTMidUTC;
+    }).sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+
     res.status(200).json({
       success: true,
-      count: users.length,
-      data: users
+      count: activePaid.length,
+      data: activePaid
     });
   } catch (error) {
     console.error('Error fetching paid users:', error);
@@ -1071,18 +1114,81 @@ app.get('/api/users/paid', async (req, res) => {
 app.get('/api/users/unpaid', async (req, res) => {
   try {
     const usersCollection = db.collection('users');
-    const users = await usersCollection.find({
+
+    // PKT timezone day start (date-only)
+    const PKT_OFFSET_MIN = 5 * 60;
+    const nowUTC = new Date();
+    const pktNow = new Date(nowUTC.getTime() + PKT_OFFSET_MIN * 60000);
+    const y = pktNow.getUTCFullYear();
+    const m = pktNow.getUTCMonth();
+    const d = pktNow.getUTCDate();
+    const todayPKTMidUTC = Date.UTC(y, m, d) - PKT_OFFSET_MIN * 60000;
+
+    // Base unpaid list (explicitly marked unpaid)
+    const explicitUnpaid = await usersCollection.find({
       status: 'unpaid',
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
       ]
-    }).sort({ createdAt: -1 }).toArray();
-    
+    }).toArray();
+
+    // Fetch paid users (non-inactive) and include those whose expiryDate < today (PKT)
+    const paidUsers = await usersCollection.find({
+      status: 'paid',
+      $or: [
+        { serviceStatus: { $ne: 'inactive' } },
+        { serviceStatus: { $exists: false } }
+      ]
+    }).toArray();
+
+    const parseExpiryToMidUTC = (exp) => {
+      if (!exp) return null;
+      if (exp instanceof Date) {
+        const dt = exp;
+        const pkt = new Date(dt.getTime() + PKT_OFFSET_MIN * 60000);
+        return Date.UTC(pkt.getUTCFullYear(), pkt.getUTCMonth(), pkt.getUTCDate()) - PKT_OFFSET_MIN * 60000;
+      }
+      if (typeof exp === 'string') {
+        const parts = exp.split('-');
+        if (parts.length === 3) {
+          const [dd, mm, yyyy] = parts;
+          const d = parseInt(dd, 10);
+          const m = parseInt(mm, 10) - 1;
+          const y = parseInt(yyyy, 10);
+          if (!isNaN(d) && !isNaN(m) && !isNaN(y)) {
+            const pktUTC = Date.UTC(y, m, d); // day at 00:00 UTC for that calendar day
+            // Convert that day to PKT midnight UTC
+            return pktUTC; // already date-only; PKT conversion done by offset compare below
+          }
+        }
+        const d2 = new Date(exp);
+        if (!isNaN(d2.getTime())) {
+          const pkt = new Date(d2.getTime() + PKT_OFFSET_MIN * 60000);
+          return Date.UTC(pkt.getUTCFullYear(), pkt.getUTCMonth(), pkt.getUTCDate()) - PKT_OFFSET_MIN * 60000;
+        }
+        return null;
+      }
+      return null;
+    };
+
+    const expiredPaid = paidUsers.filter(u => {
+      const expMidUTC = parseExpiryToMidUTC(u.expiryDate);
+      // Consider expiry on or before today as unpaid (move out of paid)
+      return expMidUTC !== null && expMidUTC <= todayPKTMidUTC;
+    });
+
+    // Merge and sort by createdAt desc as before
+    const merged = [...explicitUnpaid, ...expiredPaid].sort((a, b) => {
+      const aTime = new Date(a.createdAt || 0).getTime();
+      const bTime = new Date(b.createdAt || 0).getTime();
+      return bTime - aTime;
+    });
+
     res.status(200).json({
       success: true,
-      count: users.length,
-      data: users
+      count: merged.length,
+      data: merged
     });
   } catch (error) {
     console.error('Error fetching unpaid users:', error);
@@ -1126,15 +1232,19 @@ app.get('/api/balances', async (req, res) => {
 app.get('/api/users/expiring-soon', async (req, res) => {
   try {
     const usersCollection = db.collection('users');
-    // Establish date-only bounds in local time
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const tomorrowStart = new Date(todayStart);
-    tomorrowStart.setDate(tomorrowStart.getDate() + 1);
-    const tomorrowEnd = new Date(tomorrowStart);
-    tomorrowEnd.setHours(23, 59, 59, 999);
+    // Use PKT (UTC+05:00) day math so tomorrow is calculated for your timezone
+    const PKT_OFFSET_MIN = 5 * 60;
+    const nowUTC = new Date();
+    const nowInPKT = new Date(nowUTC.getTime() + PKT_OFFSET_MIN * 60000);
+    const todayY = nowInPKT.getUTCFullYear();
+    const todayM = nowInPKT.getUTCMonth();
+    const todayD = nowInPKT.getUTCDate();
+    const tomorrowInPKT = new Date(Date.UTC(todayY, todayM, todayD) + 24 * 60 * 60 * 1000);
+    const tomorrowY = tomorrowInPKT.getUTCFullYear();
+    const tomorrowM = tomorrowInPKT.getUTCMonth();
+    const tomorrowD = tomorrowInPKT.getUTCDate();
 
-    // Fetch paid/partial and non-inactive users, filter expiry by JS to support string dates
+    // Fetch paid/partial and non-inactive users, filter expiry by JS supporting string dates
     const usersAll = await usersCollection.find({
       status: { $in: ['paid', 'partial'] },
       $or: [
@@ -1143,48 +1253,55 @@ app.get('/api/users/expiring-soon', async (req, res) => {
       ]
     }).toArray();
 
-    // Helper to parse expiryDate stored as Date or 'DD-MM-YYYY' string
-    const parseExpiry = (exp) => {
+    // Helper: parse expiryDate to PKT Y/M/D
+    const toPKT_YMD = (dateObj) => {
+      const pkt = new Date(dateObj.getTime() + PKT_OFFSET_MIN * 60000);
+      return { y: pkt.getUTCFullYear(), m: pkt.getUTCMonth(), d: pkt.getUTCDate() };
+    };
+    const parseExpiryYMD = (exp) => {
       if (!exp) return null;
       if (exp instanceof Date) {
-        return new Date(exp.getFullYear(), exp.getMonth(), exp.getDate());
+        return toPKT_YMD(exp);
       }
       if (typeof exp === 'string') {
         const parts = exp.split('-');
         if (parts.length === 3) {
           const [dd, mm, yyyy] = parts;
           const d = parseInt(dd, 10);
-          const m = parseInt(mm, 10);
+          const m = parseInt(mm, 10) - 1;
           const y = parseInt(yyyy, 10);
           if (!isNaN(d) && !isNaN(m) && !isNaN(y)) {
-            return new Date(y, m - 1, d);
+            // Build a UTC Date for that calendar day, then convert to PKT YMD
+            const dt = new Date(Date.UTC(y, m, d));
+            return toPKT_YMD(dt);
           }
         }
         const d2 = new Date(exp);
-        if (!isNaN(d2.getTime())) {
-          return new Date(d2.getFullYear(), d2.getMonth(), d2.getDate());
-        }
+        if (!isNaN(d2.getTime())) return toPKT_YMD(d2);
         return null;
       }
       return null;
     };
 
     const filtered = usersAll
-      .map(u => ({ u, expDate: parseExpiry(u.expiryDate) }))
-      .filter(({ expDate }) => expDate && expDate >= tomorrowStart && expDate <= tomorrowEnd)
-      .sort((a, b) => a.expDate.getTime() - b.expDate.getTime());
+      .map(u => ({ u, ymd: parseExpiryYMD(u.expiryDate) }))
+      .filter(({ ymd }) => ymd && ymd.y === tomorrowY && ymd.m === tomorrowM && ymd.d === tomorrowD)
+      .sort((a, b) => {
+        // Sort by calendar day
+        if (!a.ymd || !b.ymd) return 0;
+        if (a.ymd.y !== b.ymd.y) return a.ymd.y - b.ymd.y;
+        if (a.ymd.m !== b.ymd.m) return a.ymd.m - b.ymd.m;
+        return a.ymd.d - b.ymd.d;
+      });
 
-    // Calculate days left from date-only midnight
-    const msPerDay = 24 * 60 * 60 * 1000;
-    const usersWithDaysLeft = filtered.map(({ u, expDate }) => {
-      const expMid = new Date(expDate.getFullYear(), expDate.getMonth(), expDate.getDate()).getTime();
-      const todayMid = todayStart.getTime();
-      const daysLeft = Math.round((expMid - todayMid) / msPerDay);
-      return {
-        ...u,
-        expiryDate: expDate.toISOString(),
-        daysLeft
-      };
+    // Calculate days left using PKT midnights
+    const MS_PER_DAY = 24 * 60 * 60 * 1000;
+    const todayPKTMidUTC = Date.UTC(todayY, todayM, todayD) - PKT_OFFSET_MIN * 60000;
+    const usersWithDaysLeft = filtered.map(({ u, ymd }) => {
+      const expPKTMidUTC = Date.UTC(ymd.y, ymd.m, ymd.d) - PKT_OFFSET_MIN * 60000;
+      const daysLeft = Math.round((expPKTMidUTC - todayPKTMidUTC) / MS_PER_DAY);
+      const expAsDate = new Date(Date.UTC(ymd.y, ymd.m, ymd.d));
+      return { ...u, expiryDate: expAsDate.toISOString(), daysLeft };
     });
 
     res.status(200).json({
