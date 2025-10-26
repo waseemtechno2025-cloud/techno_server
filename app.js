@@ -1015,7 +1015,11 @@ app.get('/api/dashboard/stats', async (req, res) => {
     ]).toArray();
     const totalExpense = expenseResult.length > 0 ? expenseResult[0].total : 0;
     
-    // Outstanding/Balance (unpaid users full amount + partial users remaining amount, exclude inactive)
+    // Outstanding/Balance - Calculate from vouchers to match unpaid-users.tsx display amounts
+    const vouchersCollection = db.collection('vouchers');
+    const allVouchers = await vouchersCollection.find({}).toArray();
+    
+    // Get unpaid and partial users (same as unpaid-users.tsx)
     const unpaidUsersList = await usersCollection.find({
       status: 'unpaid',
       $or: [
@@ -1023,7 +1027,6 @@ app.get('/api/dashboard/stats', async (req, res) => {
         { serviceStatus: { $exists: false } }
       ]
     }).toArray();
-    const unpaidTotal = unpaidUsersList.reduce((sum, user) => sum + Number(user.amount || 0), 0);
     
     const partialUsers = await usersCollection.find({
       status: 'partial',
@@ -1033,9 +1036,33 @@ app.get('/api/dashboard/stats', async (req, res) => {
         { serviceStatus: { $exists: false } }
       ]
     }).toArray();
-    const partialTotal = partialUsers.reduce((sum, user) => sum + Number(user.remainingAmount || 0), 0);
     
-    const outstanding = Number(unpaidTotal) + Number(partialTotal); // Total outstanding from both unpaid and partial
+    // Calculate outstanding using voucher-based totals (same as unpaid-users.tsx)
+    const calculateUserOutstanding = (user) => {
+      const userVoucher = allVouchers.find(v => v.userId === user._id.toString());
+      if (userVoucher && Array.isArray(userVoucher.months)) {
+        return userVoucher.months.reduce((sum, month) => {
+          const rem = (month.remainingAmount !== undefined && month.remainingAmount !== null)
+            ? Number(month.remainingAmount)
+            : Math.max(0, Number(month.packageFee || 0) - Number(month.paidAmount || 0));
+          return rem > 0 ? sum + rem : sum;
+        }, 0);
+      }
+      return 0; // No voucher found
+    };
+    
+    const unpaidTotal = unpaidUsersList.reduce((sum, user) => sum + calculateUserOutstanding(user), 0);
+    const partialTotal = partialUsers.reduce((sum, user) => sum + calculateUserOutstanding(user), 0);
+    
+    console.log('📊 Dashboard Outstanding Calculation:', {
+      unpaidUsersCount: unpaidUsersList.length,
+      partialUsersCount: partialUsers.length,
+      unpaidTotal,
+      partialTotal,
+      totalOutstanding: unpaidTotal + partialTotal
+    });
+    
+    const outstanding = Number(unpaidTotal) + Number(partialTotal); // Total from voucher-based calculation
     const balanceCustomers = partialUsers.length;
     
     res.status(200).json({
