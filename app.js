@@ -505,6 +505,63 @@ app.put('/api/users/:id', async (req, res) => {
       });
     }
 
+    // If package name, amount, or discount is being updated, also update related vouchers
+    if (packageName !== undefined || amount !== undefined || discount !== undefined) {
+      try {
+        console.log('📦 Updating vouchers for package change:', {
+          userId: req.params.id,
+          newPackageName: packageName,
+          newAmount: amount
+        });
+
+        // Update vouchers that have unpaid months for this user
+        const voucherUpdateFields = {};
+        if (packageName !== undefined) voucherUpdateFields['months.$[elem].packageName'] = packageName;
+        if (amount !== undefined) {
+          voucherUpdateFields['months.$[elem].packageFee'] = amount;
+        }
+        
+        // If amount or discount changed, recalculate remaining amount for unpaid months
+        if (amount !== undefined || discount !== undefined) {
+          // Get the current user data to have full context
+          const currentUser = await usersCollection.findOne({ _id: new ObjectId(req.params.id) });
+          const currentAmount = amount !== undefined ? amount : (currentUser?.amount || 0);
+          const currentDiscount = discount !== undefined ? discount : (currentUser?.discount || 0);
+          const finalAmount = currentAmount - currentDiscount;
+          
+          voucherUpdateFields['months.$[elem].packageFee'] = currentAmount;
+          voucherUpdateFields['months.$[elem].remainingAmount'] = finalAmount;
+          
+          console.log('💰 Updating voucher amounts:', {
+            currentAmount,
+            currentDiscount,
+            finalAmount
+          });
+        }
+
+        if (Object.keys(voucherUpdateFields).length > 0) {
+          await vouchersCollection.updateMany(
+            { userId: req.params.id },
+            { $set: voucherUpdateFields },
+            { 
+              arrayFilters: [
+                { 
+                  $or: [
+                    { 'elem.status': 'unpaid' },
+                    { 'elem.remainingAmount': { $gt: 0 } }
+                  ]
+                }
+              ]
+            }
+          );
+          console.log('✅ Vouchers updated for package change');
+        }
+      } catch (voucherError) {
+        console.error('⚠️ Error updating vouchers:', voucherError);
+        // Don't fail the user update if voucher update fails
+      }
+    }
+
     res.status(200).json({
       success: true,
       message: 'User updated successfully'
