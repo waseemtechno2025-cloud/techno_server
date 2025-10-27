@@ -530,6 +530,7 @@ app.put('/api/users/:id', async (req, res) => {
           const finalAmount = currentAmount - currentDiscount;
           
           voucherUpdateFields['months.$[elem].packageFee'] = currentAmount;
+          voucherUpdateFields['months.$[elem].discount'] = currentDiscount;
           voucherUpdateFields['months.$[elem].remainingAmount'] = finalAmount;
           
           console.log('💰 Updating voucher amounts:', {
