@@ -401,7 +401,7 @@ app.post('/api/users', async (req, res) => {
   }
 });
 
-// GET route to fetch all users
+// GET route to fetch all users (with optional search)
 app.get('/api/users', async (req, res) => {
   try {
     // Explicit check for collection initialization
@@ -414,7 +414,22 @@ app.get('/api/users', async (req, res) => {
       });
     }
     
-    const users = await usersCollection.find().sort({ createdAt: -1 }).toArray();
+    // Check if search query is provided
+    const searchQuery = req.query.search;
+    let query = {};
+    
+    if (searchQuery) {
+      // Search in userName, userId, and phoneNumber fields (case-insensitive)
+      query = {
+        $or: [
+          { userName: { $regex: searchQuery, $options: 'i' } },
+          { userId: { $regex: searchQuery, $options: 'i' } },
+          { phoneNumber: { $regex: searchQuery, $options: 'i' } }
+        ]
+      };
+    }
+    
+    const users = await usersCollection.find(query).sort({ createdAt: -1 }).toArray();
     res.status(200).json({
       success: true,
       count: users.length,
