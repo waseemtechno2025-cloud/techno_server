@@ -1171,9 +1171,9 @@ app.get('/api/users/paid', async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const expiryDate = req.query.expiryDate; // YYYY-MM-DD format
     
-    // Base query
+    // Base query - include both fully paid and partially paid users
     let query = {
-      status: 'paid',
+      status: { $in: ['paid', 'partial'] },
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
