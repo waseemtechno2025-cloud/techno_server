@@ -1163,65 +1163,46 @@ app.get('/api/dashboard/stats', async (req, res) => {
   }
 });
 
-// GET paid users
+// GET paid users (with date filter and pagination)
 app.get('/api/users/paid', async (req, res) => {
   try {
     const usersCollection = db.collection('users');
-
-    // PKT midnight for today
-    const PKT_OFFSET_MIN = 5 * 60;
-    const nowUTC = new Date();
-    const pktNow = new Date(nowUTC.getTime() + PKT_OFFSET_MIN * 60000);
-    const y = pktNow.getUTCFullYear();
-    const m = pktNow.getUTCMonth();
-    const d = pktNow.getUTCDate();
-    const todayPKTMidUTC = Date.UTC(y, m, d) - PKT_OFFSET_MIN * 60000;
-
-    const allPaid = await usersCollection.find({
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const expiryDate = req.query.expiryDate; // YYYY-MM-DD format
+    
+    // Base query
+    let query = {
       status: 'paid',
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
       ]
-    }).toArray();
-
-    const toMidUTC = (exp) => {
-      if (!exp) return null;
-      if (exp instanceof Date) {
-        const pkt = new Date(exp.getTime() + PKT_OFFSET_MIN * 60000);
-        return Date.UTC(pkt.getUTCFullYear(), pkt.getUTCMonth(), pkt.getUTCDate()) - PKT_OFFSET_MIN * 60000;
-      }
-      if (typeof exp === 'string') {
-        const parts = exp.split('-');
-        if (parts.length === 3) {
-          const [dd, mm, yyyy] = parts;
-          const day = parseInt(dd, 10);
-          const mon = parseInt(mm, 10) - 1;
-          const yr = parseInt(yyyy, 10);
-          if (!isNaN(day) && !isNaN(mon) && !isNaN(yr)) {
-            return Date.UTC(yr, mon, day); // date-only
-          }
-        }
-        const d2 = new Date(exp);
-        if (!isNaN(d2.getTime())) {
-          const pkt = new Date(d2.getTime() + PKT_OFFSET_MIN * 60000);
-          return Date.UTC(pkt.getUTCFullYear(), pkt.getUTCMonth(), pkt.getUTCDate()) - PKT_OFFSET_MIN * 60000;
-        }
-        return null;
-      }
-      return null;
     };
-
-    // Keep users whose expiry is null OR after today (strictly > today)
-    const activePaid = allPaid.filter(u => {
-      const mid = toMidUTC(u.expiryDate);
-      return mid === null || mid > todayPKTMidUTC;
-    }).sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
-
+    
+    // Date filter: Convert YYYY-MM-DD to DD-MM-YYYY
+    if (expiryDate) {
+      const [year, month, day] = expiryDate.split('-');
+      query.expiryDate = `${day}-${month}-${year}`;
+      console.log(`Date filter: ${expiryDate} → ${day}-${month}-${year}`);
+    }
+    
+    const totalCount = await usersCollection.countDocuments(query);
+    const users = await usersCollection
+      .find(query)
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .toArray();
+    
+    console.log(`Paid users: ${users.length} found, ${totalCount} total`);
+    
     res.status(200).json({
       success: true,
-      count: activePaid.length,
-      data: activePaid
+      data: users,
+      totalCount,
+      page,
+      limit
     });
   } catch (error) {
     console.error('Error fetching paid users:', error);
