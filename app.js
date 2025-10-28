@@ -1233,88 +1233,126 @@ app.get('/api/users/paid', async (req, res) => {
   }
 });
 
-// GET unpaid users
+// GET unpaid users (with date filter and pagination)
 app.get('/api/users/unpaid', async (req, res) => {
   try {
     const usersCollection = db.collection('users');
-
-    // PKT timezone day start (date-only)
-    const PKT_OFFSET_MIN = 5 * 60;
-    const nowUTC = new Date();
-    const pktNow = new Date(nowUTC.getTime() + PKT_OFFSET_MIN * 60000);
-    const y = pktNow.getUTCFullYear();
-    const m = pktNow.getUTCMonth();
-    const d = pktNow.getUTCDate();
-    const todayPKTMidUTC = Date.UTC(y, m, d) - PKT_OFFSET_MIN * 60000;
-
-    // Base unpaid list (explicitly marked unpaid)
-    const explicitUnpaid = await usersCollection.find({
+    const vouchersCollection = db.collection('vouchers');
+    
+    // Get query parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const expiryDate = req.query.expiryDate; // Format: YYYY-MM-DD
+    
+    console.log('📅 Fetching unpaid users:', { page, limit, expiryDate });
+    
+    let userIds = null;
+    
+    // If date filter is provided, filter by vouchers
+    if (expiryDate) {
+      const targetDate = new Date(expiryDate);
+      const startOfDay = new Date(targetDate.setHours(0, 0, 0, 0));
+      const endOfDay = new Date(targetDate.setHours(23, 59, 59, 999));
+      
+      console.log('🔍 Filtering vouchers by date range:', {
+        startOfDay: startOfDay.toISOString(),
+        endOfDay: endOfDay.toISOString()
+      });
+      
+      // Find vouchers with months that match the date and have remainingAmount > 0
+      const vouchersWithMatchingDate = await vouchersCollection.aggregate([
+        {
+          $match: {
+            'months.date': {
+              $gte: startOfDay.toISOString(),
+              $lte: endOfDay.toISOString()
+            }
+          }
+        },
+        {
+          $project: {
+            userId: 1,
+            userName: 1,
+            months: {
+              $filter: {
+                input: '$months',
+                as: 'month',
+                cond: {
+                  $and: [
+                    { $gte: ['$$month.date', startOfDay.toISOString()] },
+                    { $lte: ['$$month.date', endOfDay.toISOString()] },
+                    { $gt: ['$$month.remainingAmount', 0] }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          $match: {
+            'months.0': { $exists: true } // Only vouchers with at least one matching month
+          }
+        }
+      ]).toArray();
+      
+      console.log(`✅ Found ${vouchersWithMatchingDate.length} vouchers with matching dates`);
+      
+      // Extract user IDs
+      userIds = vouchersWithMatchingDate.map(v => v.userId);
+      
+      if (userIds.length === 0) {
+        return res.status(200).json({
+          success: true,
+          data: [],
+          totalCount: 0,
+          page,
+          limit
+        });
+      }
+    }
+    
+    // Build base query
+    let query = {
       status: 'unpaid',
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
       ]
-    }).toArray();
-
-    // Fetch paid users (non-inactive) and include those whose expiryDate < today (PKT)
-    const paidUsers = await usersCollection.find({
-      status: 'paid',
-      $or: [
-        { serviceStatus: { $ne: 'inactive' } },
-        { serviceStatus: { $exists: false } }
-      ]
-    }).toArray();
-
-    const parseExpiryToMidUTC = (exp) => {
-      if (!exp) return null;
-      if (exp instanceof Date) {
-        const dt = exp;
-        const pkt = new Date(dt.getTime() + PKT_OFFSET_MIN * 60000);
-        return Date.UTC(pkt.getUTCFullYear(), pkt.getUTCMonth(), pkt.getUTCDate()) - PKT_OFFSET_MIN * 60000;
-      }
-      if (typeof exp === 'string') {
-        const parts = exp.split('-');
-        if (parts.length === 3) {
-          const [dd, mm, yyyy] = parts;
-          const d = parseInt(dd, 10);
-          const m = parseInt(mm, 10) - 1;
-          const y = parseInt(yyyy, 10);
-          if (!isNaN(d) && !isNaN(m) && !isNaN(y)) {
-            const pktUTC = Date.UTC(y, m, d); // day at 00:00 UTC for that calendar day
-            // Convert that day to PKT midnight UTC
-            return pktUTC; // already date-only; PKT conversion done by offset compare below
-          }
-        }
-        const d2 = new Date(exp);
-        if (!isNaN(d2.getTime())) {
-          const pkt = new Date(d2.getTime() + PKT_OFFSET_MIN * 60000);
-          return Date.UTC(pkt.getUTCFullYear(), pkt.getUTCMonth(), pkt.getUTCDate()) - PKT_OFFSET_MIN * 60000;
-        }
-        return null;
-      }
-      return null;
     };
-
-    const expiredPaid = paidUsers.filter(u => {
-      const expMidUTC = parseExpiryToMidUTC(u.expiryDate);
-      // Consider expiry on or before today as unpaid (move out of paid)
-      return expMidUTC !== null && expMidUTC <= todayPKTMidUTC;
-    });
-
-    // Merge and sort by createdAt desc as before
-    const merged = [...explicitUnpaid, ...expiredPaid].sort((a, b) => {
-      const aTime = new Date(a.createdAt || 0).getTime();
-      const bTime = new Date(b.createdAt || 0).getTime();
-      return bTime - aTime;
-    });
-
+    
+    // If we filtered by date, add userId filter
+    if (userIds) {
+      query._id = { $in: userIds.map(id => {
+        try {
+          return new ObjectId(id);
+        } catch (e) {
+          return id; // If already ObjectId
+        }
+      }) };
+    }
+    
+    // Get total count for pagination
+    const totalCount = await usersCollection.countDocuments(query);
+    
+    // Get paginated users
+    const users = await usersCollection
+      .find(query)
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .toArray();
+    
+    console.log(`📊 Returning ${users.length} users (page ${page} of ${Math.ceil(totalCount / limit)})`);
+    
     res.status(200).json({
       success: true,
-      count: merged.length,
-      data: merged
+      data: users,
+      totalCount,
+      page,
+      limit
     });
   } catch (error) {
-    console.error('Error fetching unpaid users:', error);
+    console.error('❌ Error fetching unpaid users:', error);
     res.status(500).json({
       success: false,
       message: 'Error fetching unpaid users',
@@ -1323,26 +1361,126 @@ app.get('/api/users/unpaid', async (req, res) => {
   }
 });
 
-// GET balance users (partial payment users)
+// GET balance users (partial payment users with date filter and pagination)
 app.get('/api/balances', async (req, res) => {
   try {
     const usersCollection = db.collection('users');
-    const users = await usersCollection.find({
+    const vouchersCollection = db.collection('vouchers');
+    
+    // Get query parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const expiryDate = req.query.expiryDate; // Format: YYYY-MM-DD
+    
+    console.log('📅 Fetching balance users:', { page, limit, expiryDate });
+    
+    let userIds = null;
+    
+    // If date filter is provided, filter by vouchers
+    if (expiryDate) {
+      const targetDate = new Date(expiryDate);
+      const startOfDay = new Date(targetDate.setHours(0, 0, 0, 0));
+      const endOfDay = new Date(targetDate.setHours(23, 59, 59, 999));
+      
+      console.log('🔍 Filtering vouchers by date range:', {
+        startOfDay: startOfDay.toISOString(),
+        endOfDay: endOfDay.toISOString()
+      });
+      
+      // Find vouchers with months that match the date and have remainingAmount > 0
+      const vouchersWithMatchingDate = await vouchersCollection.aggregate([
+        {
+          $match: {
+            'months.date': {
+              $gte: startOfDay.toISOString(),
+              $lte: endOfDay.toISOString()
+            }
+          }
+        },
+        {
+          $project: {
+            userId: 1,
+            userName: 1,
+            months: {
+              $filter: {
+                input: '$months',
+                as: 'month',
+                cond: {
+                  $and: [
+                    { $gte: ['$$month.date', startOfDay.toISOString()] },
+                    { $lte: ['$$month.date', endOfDay.toISOString()] },
+                    { $gt: ['$$month.remainingAmount', 0] }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          $match: {
+            'months.0': { $exists: true }
+          }
+        }
+      ]).toArray();
+      
+      console.log(`✅ Found ${vouchersWithMatchingDate.length} vouchers with matching dates`);
+      
+      userIds = vouchersWithMatchingDate.map(v => v.userId);
+      
+      if (userIds.length === 0) {
+        return res.status(200).json({
+          success: true,
+          data: [],
+          totalCount: 0,
+          page,
+          limit
+        });
+      }
+    }
+    
+    // Build base query for partial payment users
+    let query = {
       status: 'partial',
       remainingAmount: { $gt: 0 },
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
       ]
-    }).sort({ createdAt: -1 }).toArray();
+    };
+    
+    // If we filtered by date, add userId filter
+    if (userIds) {
+      query._id = { $in: userIds.map(id => {
+        try {
+          return new ObjectId(id);
+        } catch (e) {
+          return id;
+        }
+      }) };
+    }
+    
+    // Get total count for pagination
+    const totalCount = await usersCollection.countDocuments(query);
+    
+    // Get paginated users
+    const users = await usersCollection
+      .find(query)
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .toArray();
+    
+    console.log(`📊 Returning ${users.length} balance users (page ${page} of ${Math.ceil(totalCount / limit)})`);
     
     res.status(200).json({
       success: true,
-      count: users.length,
-      data: users
+      data: users,
+      totalCount,
+      page,
+      limit
     });
   } catch (error) {
-    console.error('Error fetching balance users:', error);
+    console.error('❌ Error fetching balance users:', error);
     res.status(500).json({
       success: false,
       message: 'Error fetching balance users',
