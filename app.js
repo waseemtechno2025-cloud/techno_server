@@ -1237,81 +1237,11 @@ app.get('/api/users/paid', async (req, res) => {
 app.get('/api/users/unpaid', async (req, res) => {
   try {
     const usersCollection = db.collection('users');
-    const vouchersCollection = db.collection('vouchers');
-    
-    // Get query parameters
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
-    const expiryDate = req.query.expiryDate; // Format: YYYY-MM-DD
+    const expiryDate = req.query.expiryDate; // YYYY-MM-DD format
     
-    console.log('📅 Fetching unpaid users:', { page, limit, expiryDate });
-    
-    let userIds = null;
-    
-    // If date filter is provided, filter by vouchers
-    if (expiryDate) {
-      const targetDate = new Date(expiryDate);
-      const startOfDay = new Date(targetDate.setHours(0, 0, 0, 0));
-      const endOfDay = new Date(targetDate.setHours(23, 59, 59, 999));
-      
-      console.log('🔍 Filtering vouchers by date range:', {
-        startOfDay: startOfDay.toISOString(),
-        endOfDay: endOfDay.toISOString()
-      });
-      
-      // Find vouchers with months that match the date and have remainingAmount > 0
-      const vouchersWithMatchingDate = await vouchersCollection.aggregate([
-        {
-          $match: {
-            'months.date': {
-              $gte: startOfDay.toISOString(),
-              $lte: endOfDay.toISOString()
-            }
-          }
-        },
-        {
-          $project: {
-            userId: 1,
-            userName: 1,
-            months: {
-              $filter: {
-                input: '$months',
-                as: 'month',
-                cond: {
-                  $and: [
-                    { $gte: ['$$month.date', startOfDay.toISOString()] },
-                    { $lte: ['$$month.date', endOfDay.toISOString()] },
-                    { $gt: ['$$month.remainingAmount', 0] }
-                  ]
-                }
-              }
-            }
-          }
-        },
-        {
-          $match: {
-            'months.0': { $exists: true } // Only vouchers with at least one matching month
-          }
-        }
-      ]).toArray();
-      
-      console.log(`✅ Found ${vouchersWithMatchingDate.length} vouchers with matching dates`);
-      
-      // Extract user IDs
-      userIds = vouchersWithMatchingDate.map(v => v.userId);
-      
-      if (userIds.length === 0) {
-        return res.status(200).json({
-          success: true,
-          data: [],
-          totalCount: 0,
-          page,
-          limit
-        });
-      }
-    }
-    
-    // Build base query
+    // Base query
     let query = {
       status: 'unpaid',
       $or: [
@@ -1320,21 +1250,14 @@ app.get('/api/users/unpaid', async (req, res) => {
       ]
     };
     
-    // If we filtered by date, add userId filter
-    if (userIds) {
-      query._id = { $in: userIds.map(id => {
-        try {
-          return new ObjectId(id);
-        } catch (e) {
-          return id; // If already ObjectId
-        }
-      }) };
+    // Date filter: Convert YYYY-MM-DD to DD-MM-YYYY
+    if (expiryDate) {
+      const [year, month, day] = expiryDate.split('-');
+      query.expiryDate = `${day}-${month}-${year}`;
+      console.log(`Date filter: ${expiryDate} → ${day}-${month}-${year}`);
     }
     
-    // Get total count for pagination
     const totalCount = await usersCollection.countDocuments(query);
-    
-    // Get paginated users
     const users = await usersCollection
       .find(query)
       .sort({ createdAt: -1 })
@@ -1342,7 +1265,7 @@ app.get('/api/users/unpaid', async (req, res) => {
       .limit(limit)
       .toArray();
     
-    console.log(`📊 Returning ${users.length} users (page ${page} of ${Math.ceil(totalCount / limit)})`);
+    console.log(`Unpaid users: ${users.length} found, ${totalCount} total`);
     
     res.status(200).json({
       success: true,
@@ -1352,7 +1275,7 @@ app.get('/api/users/unpaid', async (req, res) => {
       limit
     });
   } catch (error) {
-    console.error('❌ Error fetching unpaid users:', error);
+    console.error('Error fetching unpaid users:', error);
     res.status(500).json({
       success: false,
       message: 'Error fetching unpaid users',
@@ -1365,80 +1288,11 @@ app.get('/api/users/unpaid', async (req, res) => {
 app.get('/api/balances', async (req, res) => {
   try {
     const usersCollection = db.collection('users');
-    const vouchersCollection = db.collection('vouchers');
-    
-    // Get query parameters
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
-    const expiryDate = req.query.expiryDate; // Format: YYYY-MM-DD
+    const expiryDate = req.query.expiryDate; // YYYY-MM-DD format
     
-    console.log('📅 Fetching balance users:', { page, limit, expiryDate });
-    
-    let userIds = null;
-    
-    // If date filter is provided, filter by vouchers
-    if (expiryDate) {
-      const targetDate = new Date(expiryDate);
-      const startOfDay = new Date(targetDate.setHours(0, 0, 0, 0));
-      const endOfDay = new Date(targetDate.setHours(23, 59, 59, 999));
-      
-      console.log('🔍 Filtering vouchers by date range:', {
-        startOfDay: startOfDay.toISOString(),
-        endOfDay: endOfDay.toISOString()
-      });
-      
-      // Find vouchers with months that match the date and have remainingAmount > 0
-      const vouchersWithMatchingDate = await vouchersCollection.aggregate([
-        {
-          $match: {
-            'months.date': {
-              $gte: startOfDay.toISOString(),
-              $lte: endOfDay.toISOString()
-            }
-          }
-        },
-        {
-          $project: {
-            userId: 1,
-            userName: 1,
-            months: {
-              $filter: {
-                input: '$months',
-                as: 'month',
-                cond: {
-                  $and: [
-                    { $gte: ['$$month.date', startOfDay.toISOString()] },
-                    { $lte: ['$$month.date', endOfDay.toISOString()] },
-                    { $gt: ['$$month.remainingAmount', 0] }
-                  ]
-                }
-              }
-            }
-          }
-        },
-        {
-          $match: {
-            'months.0': { $exists: true }
-          }
-        }
-      ]).toArray();
-      
-      console.log(`✅ Found ${vouchersWithMatchingDate.length} vouchers with matching dates`);
-      
-      userIds = vouchersWithMatchingDate.map(v => v.userId);
-      
-      if (userIds.length === 0) {
-        return res.status(200).json({
-          success: true,
-          data: [],
-          totalCount: 0,
-          page,
-          limit
-        });
-      }
-    }
-    
-    // Build base query for partial payment users
+    // Base query
     let query = {
       status: 'partial',
       remainingAmount: { $gt: 0 },
@@ -1448,21 +1302,14 @@ app.get('/api/balances', async (req, res) => {
       ]
     };
     
-    // If we filtered by date, add userId filter
-    if (userIds) {
-      query._id = { $in: userIds.map(id => {
-        try {
-          return new ObjectId(id);
-        } catch (e) {
-          return id;
-        }
-      }) };
+    // Date filter: Convert YYYY-MM-DD to DD-MM-YYYY
+    if (expiryDate) {
+      const [year, month, day] = expiryDate.split('-');
+      query.expiryDate = `${day}-${month}-${year}`;
+      console.log(`Date filter: ${expiryDate} → ${day}-${month}-${year}`);
     }
     
-    // Get total count for pagination
     const totalCount = await usersCollection.countDocuments(query);
-    
-    // Get paginated users
     const users = await usersCollection
       .find(query)
       .sort({ createdAt: -1 })
@@ -1470,7 +1317,7 @@ app.get('/api/balances', async (req, res) => {
       .limit(limit)
       .toArray();
     
-    console.log(`📊 Returning ${users.length} balance users (page ${page} of ${Math.ceil(totalCount / limit)})`);
+    console.log(`Balance users: ${users.length} found, ${totalCount} total`);
     
     res.status(200).json({
       success: true,
@@ -1480,7 +1327,7 @@ app.get('/api/balances', async (req, res) => {
       limit
     });
   } catch (error) {
-    console.error('❌ Error fetching balance users:', error);
+    console.error('Error fetching balance users:', error);
     res.status(500).json({
       success: false,
       message: 'Error fetching balance users',
