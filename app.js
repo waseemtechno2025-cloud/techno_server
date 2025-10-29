@@ -1167,9 +1167,35 @@ app.get('/api/dashboard/stats', async (req, res) => {
 app.get('/api/users/paid', async (req, res) => {
   try {
     const usersCollection = db.collection('users');
+    const vouchersCollection = db.collection('vouchers');
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
-    const expiryDate = req.query.expiryDate; // YYYY-MM-DD format
+    const paymentDate = req.query.paymentDate; // YYYY-MM-DD format
+    
+    let userIds = [];
+    
+    // If payment date filter is provided, find users who paid on that date
+    if (paymentDate) {
+      const filterDate = new Date(paymentDate);
+      const startOfDay = new Date(filterDate.setHours(0, 0, 0, 0));
+      const endOfDay = new Date(filterDate.setHours(23, 59, 59, 999));
+      
+      console.log(`Payment date filter: ${paymentDate}`);
+      console.log(`Date range: ${startOfDay.toISOString()} to ${endOfDay.toISOString()}`);
+      
+      // Find vouchers with payments on this date
+      const vouchers = await vouchersCollection.find({
+        'months': {
+          $elemMatch: {
+            status: { $in: ['paid', 'partial'] },
+            'createdAt': { $gte: startOfDay, $lte: endOfDay }
+          }
+        }
+      }).toArray();
+      
+      userIds = vouchers.map(v => v.userId);
+      console.log(`Found ${userIds.length} users with payments on ${paymentDate}`);
+    }
     
     // Base query - include both fully paid and partially paid users
     let query = {
@@ -1180,11 +1206,18 @@ app.get('/api/users/paid', async (req, res) => {
       ]
     };
     
-    // Date filter: Convert YYYY-MM-DD to DD-MM-YYYY
-    if (expiryDate) {
-      const [year, month, day] = expiryDate.split('-');
-      query.expiryDate = `${day}-${month}-${year}`;
-      console.log(`Date filter: ${expiryDate} → ${day}-${month}-${year}`);
+    // Add user ID filter if payment date was provided
+    if (paymentDate && userIds.length > 0) {
+      query._id = { $in: userIds.map(id => new ObjectId(id)) };
+    } else if (paymentDate && userIds.length === 0) {
+      // No users found for this payment date
+      return res.status(200).json({
+        success: true,
+        data: [],
+        totalCount: 0,
+        page,
+        limit
+      });
     }
     
     const totalCount = await usersCollection.countDocuments(query);
@@ -1231,11 +1264,13 @@ app.get('/api/users/unpaid', async (req, res) => {
       ]
     };
     
-    // Date filter: Convert YYYY-MM-DD to DD-MM-YYYY
+    // Date filter: Convert YYYY-MM-DD to both DD-MM-YYYY and DD/MM/YYYY formats
     if (expiryDate) {
       const [year, month, day] = expiryDate.split('-');
-      query.expiryDate = `${day}-${month}-${year}`;
-      console.log(`Date filter: ${expiryDate} → ${day}-${month}-${year}`);
+      const dateWithHyphen = `${day}-${month}-${year}`;
+      const dateWithSlash = `${day}/${month}/${year}`;
+      query.expiryDate = { $in: [dateWithHyphen, dateWithSlash] };
+      console.log(`Date filter: ${expiryDate} → ${dateWithHyphen} or ${dateWithSlash}`);
     }
     
     const totalCount = await usersCollection.countDocuments(query);
@@ -1283,11 +1318,13 @@ app.get('/api/balances', async (req, res) => {
       ]
     };
     
-    // Date filter: Convert YYYY-MM-DD to DD-MM-YYYY
+    // Date filter: Convert YYYY-MM-DD to both DD-MM-YYYY and DD/MM/YYYY formats
     if (expiryDate) {
       const [year, month, day] = expiryDate.split('-');
-      query.expiryDate = `${day}-${month}-${year}`;
-      console.log(`Date filter: ${expiryDate} → ${day}-${month}-${year}`);
+      const dateWithHyphen = `${day}-${month}-${year}`;
+      const dateWithSlash = `${day}/${month}/${year}`;
+      query.expiryDate = { $in: [dateWithHyphen, dateWithSlash] };
+      console.log(`Date filter: ${expiryDate} → ${dateWithHyphen} or ${dateWithSlash}`);
     }
     
     const totalCount = await usersCollection.countDocuments(query);
