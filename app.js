@@ -1170,31 +1170,24 @@ app.get('/api/users/paid', async (req, res) => {
     const vouchersCollection = db.collection('vouchers');
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
-    const paymentDate = req.query.paymentDate; // YYYY-MM-DD format
+    const rechargeDate = req.query.paymentDate; // YYYY-MM-DD format (frontend sends as paymentDate but we filter by rechargeDate)
     
     let userIds = [];
     
-    // If payment date filter is provided, find users who paid on that date
-    if (paymentDate) {
-      const filterDate = new Date(paymentDate);
-      const startOfDay = new Date(filterDate.setHours(0, 0, 0, 0));
-      const endOfDay = new Date(filterDate.setHours(23, 59, 59, 999));
+    // If recharge date filter is provided, find users from vouchers collection
+    if (rechargeDate) {
+      const [year, month, day] = rechargeDate.split('-');
+      const dateWithHyphen = `${day}-${month}-${year}`;
+      const dateWithSlash = `${day}/${month}/${year}`;
+      console.log(`Recharge date filter: ${rechargeDate} → ${dateWithHyphen} or ${dateWithSlash}`);
       
-      console.log(`Payment date filter: ${paymentDate}`);
-      console.log(`Date range: ${startOfDay.toISOString()} to ${endOfDay.toISOString()}`);
-      
-      // Find vouchers with payments on this date
+      // Find vouchers with matching recharge date
       const vouchers = await vouchersCollection.find({
-        'months': {
-          $elemMatch: {
-            status: { $in: ['paid', 'partial'] },
-            'createdAt': { $gte: startOfDay, $lte: endOfDay }
-          }
-        }
+        rechargeDate: { $in: [dateWithHyphen, dateWithSlash] }
       }).toArray();
       
       userIds = vouchers.map(v => v.userId);
-      console.log(`Found ${userIds.length} users with payments on ${paymentDate}`);
+      console.log(`Found ${userIds.length} vouchers with recharge date ${rechargeDate}`);
     }
     
     // Base query - include both fully paid and partially paid users
@@ -1206,11 +1199,11 @@ app.get('/api/users/paid', async (req, res) => {
       ]
     };
     
-    // Add user ID filter if payment date was provided
-    if (paymentDate && userIds.length > 0) {
+    // Add user ID filter if recharge date was provided
+    if (rechargeDate && userIds.length > 0) {
       query._id = { $in: userIds.map(id => new ObjectId(id)) };
-    } else if (paymentDate && userIds.length === 0) {
-      // No users found for this payment date
+    } else if (rechargeDate && userIds.length === 0) {
+      // No users found for this recharge date
       return res.status(200).json({
         success: true,
         data: [],
@@ -1251,9 +1244,28 @@ app.get('/api/users/paid', async (req, res) => {
 app.get('/api/users/unpaid', async (req, res) => {
   try {
     const usersCollection = db.collection('users');
+    const vouchersCollection = db.collection('vouchers');
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const expiryDate = req.query.expiryDate; // YYYY-MM-DD format
+    
+    let userIds = [];
+    
+    // If expiry date filter is provided, find users from vouchers collection
+    if (expiryDate) {
+      const [year, month, day] = expiryDate.split('-');
+      const dateWithHyphen = `${day}-${month}-${year}`;
+      const dateWithSlash = `${day}/${month}/${year}`;
+      console.log(`Date filter: ${expiryDate} → ${dateWithHyphen} or ${dateWithSlash}`);
+      
+      // Find vouchers with matching expiry date
+      const vouchers = await vouchersCollection.find({
+        expiryDate: { $in: [dateWithHyphen, dateWithSlash] }
+      }).toArray();
+      
+      userIds = vouchers.map(v => v.userId);
+      console.log(`Found ${userIds.length} vouchers with expiry date ${expiryDate}`);
+    }
     
     // Base query
     let query = {
@@ -1264,13 +1276,18 @@ app.get('/api/users/unpaid', async (req, res) => {
       ]
     };
     
-    // Date filter: Convert YYYY-MM-DD to both DD-MM-YYYY and DD/MM/YYYY formats
-    if (expiryDate) {
-      const [year, month, day] = expiryDate.split('-');
-      const dateWithHyphen = `${day}-${month}-${year}`;
-      const dateWithSlash = `${day}/${month}/${year}`;
-      query.expiryDate = { $in: [dateWithHyphen, dateWithSlash] };
-      console.log(`Date filter: ${expiryDate} → ${dateWithHyphen} or ${dateWithSlash}`);
+    // Add user ID filter if expiry date was provided
+    if (expiryDate && userIds.length > 0) {
+      query._id = { $in: userIds.map(id => new ObjectId(id)) };
+    } else if (expiryDate && userIds.length === 0) {
+      // No users found for this expiry date
+      return res.status(200).json({
+        success: true,
+        data: [],
+        totalCount: 0,
+        page,
+        limit
+      });
     }
     
     const totalCount = await usersCollection.countDocuments(query);
@@ -1304,9 +1321,28 @@ app.get('/api/users/unpaid', async (req, res) => {
 app.get('/api/balances', async (req, res) => {
   try {
     const usersCollection = db.collection('users');
+    const vouchersCollection = db.collection('vouchers');
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const expiryDate = req.query.expiryDate; // YYYY-MM-DD format
+    
+    let userIds = [];
+    
+    // If expiry date filter is provided, find users from vouchers collection
+    if (expiryDate) {
+      const [year, month, day] = expiryDate.split('-');
+      const dateWithHyphen = `${day}-${month}-${year}`;
+      const dateWithSlash = `${day}/${month}/${year}`;
+      console.log(`Date filter: ${expiryDate} → ${dateWithHyphen} or ${dateWithSlash}`);
+      
+      // Find vouchers with matching expiry date
+      const vouchers = await vouchersCollection.find({
+        expiryDate: { $in: [dateWithHyphen, dateWithSlash] }
+      }).toArray();
+      
+      userIds = vouchers.map(v => v.userId);
+      console.log(`Found ${userIds.length} vouchers with expiry date ${expiryDate}`);
+    }
     
     // Base query
     let query = {
@@ -1318,13 +1354,18 @@ app.get('/api/balances', async (req, res) => {
       ]
     };
     
-    // Date filter: Convert YYYY-MM-DD to both DD-MM-YYYY and DD/MM/YYYY formats
-    if (expiryDate) {
-      const [year, month, day] = expiryDate.split('-');
-      const dateWithHyphen = `${day}-${month}-${year}`;
-      const dateWithSlash = `${day}/${month}/${year}`;
-      query.expiryDate = { $in: [dateWithHyphen, dateWithSlash] };
-      console.log(`Date filter: ${expiryDate} → ${dateWithHyphen} or ${dateWithSlash}`);
+    // Add user ID filter if expiry date was provided
+    if (expiryDate && userIds.length > 0) {
+      query._id = { $in: userIds.map(id => new ObjectId(id)) };
+    } else if (expiryDate && userIds.length === 0) {
+      // No users found for this expiry date
+      return res.status(200).json({
+        success: true,
+        data: [],
+        totalCount: 0,
+        page,
+        limit
+      });
     }
     
     const totalCount = await usersCollection.countDocuments(query);
@@ -1662,6 +1703,8 @@ app.post('/api/vouchers', async (req, res) => {
     const {
       userId,
       userName,
+      rechargeDate,
+      expiryDate,
       packageFee,
       paidAmount,
       remainingAmount,
@@ -1712,10 +1755,17 @@ app.post('/api/vouchers', async (req, res) => {
         });
       }
 
-      // Add new month to existing document
+      // Add new month to existing document and update dates if provided
+      const updateFields = { $push: { months: monthData } };
+      if (rechargeDate || expiryDate) {
+        updateFields.$set = {};
+        if (rechargeDate) updateFields.$set.rechargeDate = rechargeDate;
+        if (expiryDate) updateFields.$set.expiryDate = expiryDate;
+      }
+      
       await vouchersCollection.updateOne(
         { userId },
-        { $push: { months: monthData } }
+        updateFields
       );
 
       res.status(200).json({
@@ -1728,6 +1778,8 @@ app.post('/api/vouchers', async (req, res) => {
       const newVoucher = {
         userId,
         userName,
+        rechargeDate: rechargeDate || null,
+        expiryDate: expiryDate || null,
         months: [monthData],
         createdAt: new Date()
       };
