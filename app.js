@@ -2006,7 +2006,7 @@ const checkExpiringUsers = async () => {
 // RECURRING CYCLE FLOW:
 // 1. User added: 28/10/2025 (recharge) → 28/11/2025 (expiry) → Status: PAID
 // 2. On 27/11/2025: User shows in "Expiring Soon" (1 day before expiry)
-// 3. On 28/11/2025 (TODAY): This function runs at midnight
+// 3. On 28/11/2025 (TODAY): This function runs at noon (12:00 PM)
 //    - User moves to UNPAID status
 //    - Creates December voucher (unpaid)
 //    - Updates expiry to 28/12/2025
@@ -2172,11 +2172,11 @@ const moveTodayExpiredToUnpaid = async () => {
 
 // Initialize scheduled tasks (called after MongoDB connection)
 const initializeScheduledTasks = () => {
-  // ===== MAIN PRODUCTION TASKS - Run at Midnight (12:00 AM) =====
+  // ===== MAIN PRODUCTION TASKS - Run at Noon (12:00 PM) =====
   
-  // Schedule task: Daily at midnight - Check users expiring TOMORROW + Move TODAY expiring to unpaid
-  cron.schedule('0 0 * * *', () => {
-    console.log('⏰ Midnight (12:00 AM) task triggered');
+  // Schedule task: Daily at noon - Check users expiring TOMORROW + Move TODAY expiring to unpaid
+  cron.schedule('0 12 * * *', () => {
+    console.log('⏰ Noon (12:00 PM) task triggered');
     
     // First: Check users expiring TOMORROW (for expiring-soon tab)
     checkTomorrowExpiringUsers();
@@ -2204,7 +2204,7 @@ const initializeScheduledTasks = () => {
   checkMissedReminders();
 
   console.log('📅 Scheduled tasks initialized:');
-  console.log('   → 12:00 AM (midnight): Check expiring users & move expired to unpaid');
+  console.log('   → 12:00 PM (noon): Check expiring users & move expired to unpaid');
   console.log('   → 8:00 PM: Check and send payment reminders');
   console.log('   → On startup: Check and send any missed reminders');
 };
