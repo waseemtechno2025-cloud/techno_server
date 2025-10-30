@@ -339,12 +339,16 @@ app.post('/api/users', async (req, res) => {
       paymentType
     });
     
-    // Determine payment status based on paymentType
+    // Determine payment status based on paymentType or explicit status
     let paymentStatus = 'unpaid'; // Default for "Pay Later"
     let paidAmount = 0;
     let remainingAmount = totalAmountForAllMonths;
     
-    if (paymentType === 'now') {
+    // If status is explicitly set to 'pending', use that (for disable paid/unpaid checkbox)
+    if (status === 'pending') {
+      paymentStatus = 'pending';
+      console.log('✅ Using pending status - customer will appear in Expiring Soon only');
+    } else if (paymentType === 'now') {
       // For "Pay Now", first month is paid, remaining months are pending
       paymentStatus = numberOfMonths > 1 ? 'partial' : 'paid';
       paidAmount = monthlyFeeAfterDiscount; // Only first month paid
@@ -373,8 +377,8 @@ app.post('/api/users', async (req, res) => {
       assignTo: assignTo ? assignTo.trim() : '',
       rechargeDate: rechargeDate || null,
       expiryDate: expiryDate || null,
-      status: paymentStatus, // Payment status: paid, unpaid, partial
-      serviceStatus: status || 'active', // Service status: active, inactive
+      status: paymentStatus, // Payment status: paid, unpaid, partial, pending
+      serviceStatus: 'active', // Service status: always active for new users
       paidAmount: paidAmount,
       remainingAmount: remainingAmount,
       createdAt: new Date()
