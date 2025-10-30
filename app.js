@@ -1300,7 +1300,7 @@ app.get('/api/users/unpaid', async (req, res) => {
       console.log(`Found ${userIds.length} vouchers with expiry date ${expiryDate}`);
     }
     
-    // Base query
+    // Base query - Only show unpaid status (exclude pending)
     let query = {
       status: 'unpaid',
       $or: [
@@ -1444,9 +1444,9 @@ app.get('/api/users/expiring-soon', async (req, res) => {
     const tomorrowM = tomorrowInPKT.getUTCMonth();
     const tomorrowD = tomorrowInPKT.getUTCDate();
 
-    // Fetch paid/partial and non-inactive users, filter expiry by JS supporting string dates
+    // Fetch paid/partial/pending and non-inactive users, filter expiry by JS supporting string dates
     const usersAll = await usersCollection.find({
-      status: { $in: ['paid', 'partial'] },
+      status: { $in: ['paid', 'partial', 'pending'] },
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
@@ -2019,16 +2019,16 @@ const moveTodayExpiredToUnpaid = async () => {
     const endOfToday = new Date(today);
     endOfToday.setHours(23, 59, 59, 999);
     
-    // Find users who are paid/partial and expiring TODAY
+    // Find users who are paid/partial/pending and expiring TODAY
     const expiredUsers = await usersCollection.find({
-      status: { $in: ['paid', 'partial'] },
+      status: { $in: ['paid', 'partial', 'pending'] },
       expiryDate: { 
         $gte: today.toISOString(),
         $lte: endOfToday.toISOString() 
       }
     }).toArray();
     
-    console.log(`✅ Found ${expiredUsers.length} expired users to move to unpaid`);
+    console.log(`✅ Found ${expiredUsers.length} expired users to move to unpaid (including pending customers)`);
     
     if (expiredUsers.length > 0) {
       // Process each user: move to unpaid and create next month's voucher
@@ -2081,26 +2081,26 @@ const moveTodayExpiredToUnpaid = async () => {
         // Find or create voucher for this user
         let userVoucher = await vouchersCollection.findOne({ userId: user._id.toString() });
         
+        const newMonth = {
+          month: monthName,
+          packageFee: user.amount || 0,
+          paidAmount: 0,
+          remainingAmount: user.amount || 0,
+          paymentMethod: 'Pending',
+          receivedBy: '',
+          paymentType: 'later',
+          status: 'unpaid',
+          description: `${monthName} - Pending Payment`,
+          date: new Date(),
+          createdAt: new Date()
+        };
+        
         if (userVoucher) {
           // Check if next month already exists
           const monthExists = userVoucher.months?.some(m => m.month === monthName);
           
           if (!monthExists) {
             // Add new unpaid month
-            const newMonth = {
-              month: monthName,
-              packageFee: user.amount || 0,
-              paidAmount: 0,
-              remainingAmount: user.amount || 0,
-              paymentMethod: 'Pending',
-              receivedBy: '',
-              paymentType: 'later',
-              status: 'unpaid',
-              description: `${monthName} - Pending Payment`,
-              date: new Date(),
-              createdAt: new Date()
-            };
-            
             await vouchersCollection.updateOne(
               { userId: user._id.toString() },
               { 
@@ -2117,7 +2117,27 @@ const moveTodayExpiredToUnpaid = async () => {
             console.log(`   ⚠️ ${monthName} already exists in voucher`);
           }
         } else {
-          console.log(`   ⚠️ No voucher found for ${user.userName}`);
+          // Create new voucher document for this user (especially for pending users)
+          console.log(`   📝 Creating new voucher for ${user.userName}`);
+          
+          const newVoucher = {
+            userId: user._id.toString(),
+            userName: user.userName,
+            rechargeDate: user.rechargeDate || formatDate(currentExpiryDate),
+            expiryDate: newExpiryDateStr,
+            packageFee: user.amount || 0,
+            paidAmount: 0,
+            remainingAmount: user.amount || 0,
+            paymentMethod: 'Pending',
+            receivedBy: '',
+            paymentType: 'later',
+            status: 'unpaid',
+            months: [newMonth],
+            createdAt: new Date()
+          };
+          
+          await vouchersCollection.insertOne(newVoucher);
+          console.log(`   ✅ Created new voucher with ${monthName}`);
         }
       }
       
