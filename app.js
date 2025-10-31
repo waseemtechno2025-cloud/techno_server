@@ -1779,48 +1779,59 @@ app.post('/api/vouchers', async (req, res) => {
       createdAt: new Date()
     };
 
-    // NEW STRUCTURE: Create separate voucher document for each month
-    // Check if this month already exists as a separate document
-    const existingSeparateVoucher = await vouchersCollection.findOne({ 
-      userId, 
-      month,
-      months: { $exists: false } // No months array means separate document
-    });
+    // Check if user already has a voucher document
+    const existingVoucher = await vouchersCollection.findOne({ userId });
 
-    if (existingSeparateVoucher) {
-      return res.status(400).json({
-        success: false,
-        message: `Voucher for ${month} already exists as a separate document.`
+    if (existingVoucher) {
+      // Check if the same month already exists
+      const monthExists = existingVoucher.months?.some(
+        (m) => m.month === month
+      );
+
+      if (monthExists) {
+        return res.status(400).json({
+          success: false,
+          message: `Voucher for ${month} already exists for this user.`
+        });
+      }
+
+      // Add new month to existing document and update dates if provided
+      const updateFields = { $push: { months: monthData } };
+      if (rechargeDate || expiryDate) {
+        updateFields.$set = {};
+        if (rechargeDate) updateFields.$set.rechargeDate = rechargeDate;
+        if (expiryDate) updateFields.$set.expiryDate = expiryDate;
+      }
+      
+      await vouchersCollection.updateOne(
+        { userId },
+        updateFields
+      );
+
+      res.status(200).json({
+        success: true,
+        message: `New month (${month}) added to existing voucher.`,
+        data: monthData
+      });
+    } else {
+      // Create new voucher document for the user with months array
+      const newVoucher = {
+        userId,
+        userName,
+        rechargeDate: rechargeDate || null,
+        expiryDate: expiryDate || null,
+        months: [monthData],
+        createdAt: new Date()
+      };
+
+      const result = await vouchersCollection.insertOne(newVoucher);
+
+      res.status(201).json({
+        success: true,
+        message: 'New voucher document created for user.',
+        data: { _id: result.insertedId, ...newVoucher }
       });
     }
-
-    // Create separate voucher document for this month
-    const newSeparateVoucher = {
-      userId,
-      userName,
-      rechargeDate: rechargeDate || null,
-      expiryDate: expiryDate || null,
-      month,
-      packageFee: parseFloat(packageFee),
-      discount: parseFloat(discount) || 0,
-      paidAmount: parseFloat(paidAmount) || 0,
-      remainingAmount: parseFloat(remainingAmount) || 0,
-      paymentMethod: paymentMethod || 'Not Paid',
-      receivedBy: receivedBy || 'Myself',
-      paymentType: paymentType || 'later',
-      status: status || 'unpaid',
-      description: description || `${month} - ${status === 'paid' ? 'Paid' : 'Pending'}`,
-      date: date ? new Date(date) : new Date(),
-      createdAt: new Date()
-    };
-
-    const result = await vouchersCollection.insertOne(newSeparateVoucher);
-
-    res.status(201).json({
-      success: true,
-      message: `Separate voucher created for ${month}.`,
-      data: { _id: result.insertedId, ...newSeparateVoucher }
-    });
   } catch (error) {
     console.error('Error creating voucher:', error);
     res.status(500).json({
