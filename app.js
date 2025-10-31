@@ -1742,6 +1742,7 @@ app.post('/api/vouchers', async (req, res) => {
       userName,
       rechargeDate,
       expiryDate,
+      months,  // NEW: Support for months array
       packageFee,
       discount,
       paidAmount,
@@ -1754,6 +1755,54 @@ app.post('/api/vouchers', async (req, res) => {
       date,
       description
     } = req.body;
+    
+    // NEW: If months array is provided, create voucher with months array structure
+    if (months && Array.isArray(months) && months.length > 0) {
+      console.log(`📦 Creating voucher with ${months.length} months array for user ${userName}`);
+      
+      // Check if user already has a voucher
+      const existingVoucher = await vouchersCollection.findOne({ userId });
+      
+      if (existingVoucher) {
+        // Update existing voucher with new months array
+        const result = await vouchersCollection.updateOne(
+          { userId },
+          { 
+            $set: { 
+              months,
+              rechargeDate: rechargeDate || existingVoucher.rechargeDate,
+              expiryDate: expiryDate || existingVoucher.expiryDate
+            } 
+          }
+        );
+        
+        return res.status(200).json({
+          success: true,
+          message: 'Voucher updated with months array',
+          data: { _id: existingVoucher._id }
+        });
+      } else {
+        // Create new voucher with months array
+        const newVoucher = {
+          userId,
+          userName,
+          rechargeDate: rechargeDate || null,
+          expiryDate: expiryDate || null,
+          months,
+          createdAt: new Date()
+        };
+        
+        const result = await vouchersCollection.insertOne(newVoucher);
+        
+        return res.status(201).json({
+          success: true,
+          message: 'Voucher created with months array',
+          data: { _id: result.insertedId, ...newVoucher }
+        });
+      }
+    }
+    
+    // EXISTING: Individual month creation logic (for backward compatibility)
 
     // Required validation
     if (!userId || !userName || packageFee === undefined || !month) {
