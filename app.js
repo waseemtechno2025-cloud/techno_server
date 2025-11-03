@@ -1461,6 +1461,19 @@ app.get('/api/users/expiring-soon', async (req, res) => {
       targetD = tomorrowInPKT.getUTCDate();
     }
 
+    // Guard: if target day is on/before today's PKT day, return no results (only show upcoming)
+    const isBeforeToday =
+      (targetY < todayY) ||
+      (targetY === todayY && (targetM < todayM || (targetM === todayM && targetD < todayD)));
+    const isToday = (targetY === todayY && targetM === todayM && targetD === todayD);
+    if (isBeforeToday || isToday) {
+      return res.status(200).json({
+        success: true,
+        count: 0,
+        data: []
+      });
+    }
+
     // Fetch ALL users (paid/partial/unpaid/pending) and non-inactive users, filter expiry by JS supporting string dates
     // NOTE: Include unpaid and pending so "Pay Later" and checkbox users appear in expiring soon based on date
     const usersAll = await usersCollection.find({
@@ -1471,28 +1484,30 @@ app.get('/api/users/expiring-soon', async (req, res) => {
       ]
     }).toArray();
 
-    // Helper: parse expiryDate to PKT Y/M/D
+    // Helper: parse expiryDate to PKT Y/M/D (supports DD-MM-YYYY and DD/MM/YYYY, and ISO fallback)
     const toPKT_YMD = (dateObj) => {
       const pkt = new Date(dateObj.getTime() + PKT_OFFSET_MIN * 60000);
       return { y: pkt.getUTCFullYear(), m: pkt.getUTCMonth(), d: pkt.getUTCDate() };
     };
     const parseExpiryYMD = (exp) => {
       if (!exp) return null;
-      if (exp instanceof Date) {
-        return toPKT_YMD(exp);
-      }
+      if (exp instanceof Date) return toPKT_YMD(exp);
       if (typeof exp === 'string') {
-        const parts = exp.split('-');
-        if (parts.length === 3) {
-          const [dd, mm, yyyy] = parts;
-          const d = parseInt(dd, 10);
-          const m = parseInt(mm, 10) - 1;
-          const y = parseInt(yyyy, 10);
-          if (!isNaN(d) && !isNaN(m) && !isNaN(y)) {
-            // Build a UTC Date for that calendar day, then convert to PKT YMD
-            const dt = new Date(Date.UTC(y, m, d));
-            return toPKT_YMD(dt);
-          }
+        const m1 = exp.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/); // DD-MM-YYYY or DD/MM/YYYY
+        if (m1) {
+          const d = parseInt(m1[1], 10);
+          const m = parseInt(m1[2], 10) - 1;
+          const y = parseInt(m1[3], 10);
+          const dt = new Date(Date.UTC(y, m, d));
+          return toPKT_YMD(dt);
+        }
+        const m2 = exp.match(/^(\d{4})-(\d{2})-(\d{2})/); // ISO-like
+        if (m2) {
+          const y = parseInt(m2[1], 10);
+          const m = parseInt(m2[2], 10) - 1;
+          const d = parseInt(m2[3], 10);
+          const dt = new Date(Date.UTC(y, m, d));
+          return toPKT_YMD(dt);
         }
         const d2 = new Date(exp);
         if (!isNaN(d2.getTime())) return toPKT_YMD(d2);
@@ -2135,15 +2150,53 @@ const moveTodayExpiredToUnpaid = async () => {
     const endOfToday = new Date(today);
     endOfToday.setHours(23, 59, 59, 999);
     
-    // Find ALL users (paid/partial/unpaid/pending) expiring TODAY
-    // NOTE: Include unpaid and pending so "Pay Later" and checkbox users also get next month's voucher
-    const expiredUsers = await usersCollection.find({
+    // Find ALL users (paid/partial/unpaid/pending) and match expiry by PKT calendar-day equality
+    // NOTE: Do not use ISO range because expiryDate is stored as string (DD-MM-YYYY or DD/MM/YYYY)
+    const PKT_OFFSET_MIN = 5 * 60;
+    const nowUTC = new Date();
+    const nowInPKT = new Date(nowUTC.getTime() + PKT_OFFSET_MIN * 60000);
+    const todayY = nowInPKT.getUTCFullYear();
+    const todayM = nowInPKT.getUTCMonth();
+    const todayD = nowInPKT.getUTCDate();
+
+    const usersAll = await usersCollection.find({
       status: { $in: ['paid', 'partial', 'unpaid', 'pending'] },
-      expiryDate: { 
-        $gte: today.toISOString(),
-        $lte: endOfToday.toISOString() 
-      }
+      $or: [
+        { serviceStatus: { $ne: 'inactive' } },
+        { serviceStatus: { $exists: false } }
+      ]
     }).toArray();
+
+    const toPKT_YMD = (dateObj) => {
+      const pkt = new Date(dateObj.getTime() + PKT_OFFSET_MIN * 60000);
+      return { y: pkt.getUTCFullYear(), m: pkt.getUTCMonth(), d: pkt.getUTCDate() };
+    };
+    const parseExpiryYMD = (exp) => {
+      if (!exp) return null;
+      if (exp instanceof Date) return toPKT_YMD(exp);
+      if (typeof exp === 'string') {
+        const parts = exp.split('-');
+        if (parts.length === 3) {
+          const [dd, mm, yyyy] = parts;
+          const d = parseInt(dd, 10);
+          const m = parseInt(mm, 10) - 1;
+          const y = parseInt(yyyy, 10);
+          if (!isNaN(d) && !isNaN(m) && !isNaN(y)) {
+            const dt = new Date(Date.UTC(y, m, d));
+            return toPKT_YMD(dt);
+          }
+        }
+        const d2 = new Date(exp);
+        if (!isNaN(d2.getTime())) return toPKT_YMD(d2);
+        return null;
+      }
+      return null;
+    };
+
+    const expiredUsers = usersAll
+      .map(u => ({ u, ymd: parseExpiryYMD(u.expiryDate) }))
+      .filter(({ ymd }) => ymd && ymd.y === todayY && ymd.m === todayM && ymd.d === todayD)
+      .map(({ u }) => u);
     
     console.log(`✅ Found ${expiredUsers.length} users expiring today (will create next month voucher)`);
     
@@ -2198,11 +2251,16 @@ const moveTodayExpiredToUnpaid = async () => {
         // Find or create voucher for this user
         let userVoucher = await vouchersCollection.findOne({ userId: user._id.toString() });
         
+        const packageFeePerMonth = Number(user.amount || 0);
+        const discountPerMonth = Number(user.discount || 0);
+        const remainingAfterDiscount = Math.max(0, packageFeePerMonth - discountPerMonth);
+
         const newMonth = {
           month: monthName,
-          packageFee: user.amount || 0,
+          packageFee: packageFeePerMonth,
+          discount: discountPerMonth,
           paidAmount: 0,
-          remainingAmount: user.amount || 0,
+          remainingAmount: remainingAfterDiscount,
           paymentMethod: 'Pending',
           receivedBy: '',
           paymentType: 'later',
@@ -2285,9 +2343,9 @@ const moveTodayExpiredToUnpaid = async () => {
 
 // Initialize scheduled tasks (called after MongoDB connection)
 const initializeScheduledTasks = () => {
-  // ===== MAIN PRODUCTION TASKS - Run at Noon (12:00 PM) =====
+  // ===== MAIN PRODUCTION TASKS =====
   
-  // Schedule task: Daily at noon - Check users expiring TOMORROW + Move TODAY expiring to unpaid
+  // Schedule task: Daily at noon - Check users expiring TOMORROW + Move TODAY expiring to unpaid (backup)
   cron.schedule('0 12 * * *', () => {
     console.log('⏰ Noon (12:00 PM) task triggered');
     
