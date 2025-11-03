@@ -1893,15 +1893,62 @@ app.post('/api/vouchers', async (req, res) => {
   }
 });
 
-
-
-// GET user transaction history
-app.get('/api/users/:id/transactions', async (req, res) => {
+// PUT update voucher by ID (update months array and optional dates)
+app.put('/api/vouchers/:id', async (req, res) => {
   try {
     if (!ObjectId.isValid(req.params.id)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid user ID format'
+        message: 'Invalid voucher ID format'
+      });
+    }
+
+    const vouchersCollection = db.collection('vouchers');
+    const { months, rechargeDate, expiryDate } = req.body;
+    const updateFields = {};
+
+    if (Array.isArray(months)) updateFields.months = months;
+    if (rechargeDate !== undefined) updateFields.rechargeDate = rechargeDate || null;
+    if (expiryDate !== undefined) updateFields.expiryDate = expiryDate || null;
+    updateFields.updatedAt = new Date();
+
+    if (Object.keys(updateFields).length === 1 && updateFields.updatedAt) {
+      return res.status(400).json({
+        success: false,
+        message: 'No fields to update'
+      });
+    }
+
+    const result = await vouchersCollection.updateOne(
+      { _id: new ObjectId(req.params.id) },
+      { $set: updateFields }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Voucher not found'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Voucher updated successfully'
+    });
+  } catch (error) {
+    console.error('Error updating voucher:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error updating voucher',
+      error: error.message
+    });
+  }
+});
+
+// GET user transaction history
+app.get('/api/users/:id/transactions', async (req, res) => {
+  try {
+    // ... (rest of the code remains the same)
       });
     }
 
