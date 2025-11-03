@@ -431,6 +431,7 @@ app.post('/api/users', async (req, res) => {
       serviceStatus: 'active', // Service status: always active for new users
       paidAmount: paidAmount,
       remainingAmount: remainingAmount,
+      showInExpiringSoon: false, // Will be set to true by cron job day before expiry
       createdAt: new Date()
     };
 
@@ -1524,9 +1525,10 @@ app.get('/api/users/expiring-soon', async (req, res) => {
       });
     }
 
-    // Fetch ALL users (paid/partial/unpaid/pending) and non-inactive users, filter expiry by JS supporting string dates
-    // NOTE: Include unpaid and pending so "Pay Later" and checkbox users appear in expiring soon based on date
+    // Fetch users marked by cron job as "expiring soon"
+    // NOTE: showInExpiringSoon flag is set by cron job at 12 PM day before expiry
     const usersAll = await usersCollection.find({
+      showInExpiringSoon: true,
       status: { $in: ['paid', 'partial', 'unpaid', 'pending'] },
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
@@ -2106,36 +2108,79 @@ app.use((err, req, res, next) => {
 
 // ============ SCHEDULED TASKS ============
 
-// Function to check users expiring TOMORROW (next day) - shows in expiring-soon tab
+// Function to check users expiring TOMORROW (next day) - marks them to show in expiring-soon tab
 const checkTomorrowExpiringUsers = async () => {
   try {
     console.log('🕐 Running scheduled task: Checking users expiring TOMORROW...');
     
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // Use PKT timezone
+    const PKT_OFFSET_MIN = 5 * 60;
+    const nowUTC = new Date();
+    const nowInPKT = new Date(nowUTC.getTime() + PKT_OFFSET_MIN * 60000);
+    const todayY = nowInPKT.getUTCFullYear();
+    const todayM = nowInPKT.getUTCMonth();
+    const todayD = nowInPKT.getUTCDate();
     
-    // Calculate tomorrow's date
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const endOfTomorrow = new Date(tomorrow);
-    endOfTomorrow.setHours(23, 59, 59, 999);
+    // Calculate tomorrow's date in PKT
+    const tomorrowDate = new Date(Date.UTC(todayY, todayM, todayD + 1));
+    const tomorrowY = tomorrowDate.getUTCFullYear();
+    const tomorrowM = tomorrowDate.getUTCMonth();
+    const tomorrowD = tomorrowDate.getUTCDate();
     
-    // Find users who are paid/partial/unpaid/pending and expiring TOMORROW
-    // NOTE: Include unpaid and pending so "Pay Later" and checkbox users are also checked
-    const expiringTomorrowUsers = await usersCollection.find({
+    console.log(`📅 Today: ${todayY}-${todayM+1}-${todayD}, Tomorrow: ${tomorrowY}-${tomorrowM+1}-${tomorrowD}`);
+    
+    // Fetch ALL users and parse their expiry dates
+    const usersAll = await usersCollection.find({
       status: { $in: ['paid', 'partial', 'unpaid', 'pending'] },
-      expiryDate: { 
-        $gte: tomorrow.toISOString(), 
-        $lte: endOfTomorrow.toISOString() 
-      }
+      $or: [
+        { serviceStatus: { $ne: 'inactive' } },
+        { serviceStatus: { $exists: false } }
+      ]
     }).toArray();
     
-    console.log(`✅ Found ${expiringTomorrowUsers.length} users expiring TOMORROW (${tomorrow.toDateString()})`);
+    const toPKT_YMD = (dateObj) => {
+      const pkt = new Date(dateObj.getTime() + PKT_OFFSET_MIN * 60000);
+      return { y: pkt.getUTCFullYear(), m: pkt.getUTCMonth(), d: pkt.getUTCDate() };
+    };
+    
+    const parseExpiryYMD = (exp) => {
+      if (!exp) return null;
+      if (exp instanceof Date) return toPKT_YMD(exp);
+      if (typeof exp === 'string') {
+        const parts = exp.split('-');
+        if (parts.length === 3) {
+          const d = parseInt(parts[0], 10);
+          const m = parseInt(parts[1], 10) - 1;
+          const y = parseInt(parts[2], 10);
+          if (!isNaN(d) && !isNaN(m) && !isNaN(y)) {
+            const dt = new Date(Date.UTC(y, m, d));
+            return toPKT_YMD(dt);
+          }
+        }
+        const d2 = new Date(exp);
+        if (!isNaN(d2.getTime())) return toPKT_YMD(d2);
+        return null;
+      }
+      return null;
+    };
+    
+    // Find users expiring TOMORROW
+    const expiringTomorrowUsers = usersAll
+      .map(u => ({ u, ymd: parseExpiryYMD(u.expiryDate) }))
+      .filter(({ ymd }) => ymd && ymd.y === tomorrowY && ymd.m === tomorrowM && ymd.d === tomorrowD)
+      .map(({ u }) => u);
+    
+    console.log(`✅ Found ${expiringTomorrowUsers.length} users expiring TOMORROW`);
     
     if (expiringTomorrowUsers.length > 0) {
-      expiringTomorrowUsers.forEach(user => {
-        console.log(`   - ${user.userName} expires TOMORROW (${user.expiryDate})`);
-      });
+      // Set showInExpiringSoon flag for these users
+      for (const user of expiringTomorrowUsers) {
+        await usersCollection.updateOne(
+          { _id: user._id },
+          { $set: { showInExpiringSoon: true } }
+        );
+        console.log(`   ✅ ${user.userName} marked for Expiring Soon (expires: ${user.expiryDate})`);
+      }
     }
     
   } catch (error) {
@@ -2296,13 +2341,14 @@ const moveTodayExpiredToUnpaid = async () => {
         console.log(`   → Creating next month voucher: ${monthName}`);
         console.log(`   → New expiry date: ${newExpiryDateStr}`);
         
-        // Update user status to unpaid and new expiry date
+        // Update user status to unpaid, new expiry date, and remove from Expiring Soon
         await usersCollection.updateOne(
           { _id: user._id },
           { 
             $set: { 
               status: 'unpaid',
-              expiryDate: newExpiryDateStr
+              expiryDate: newExpiryDateStr,
+              showInExpiringSoon: false
             } 
           }
         );
