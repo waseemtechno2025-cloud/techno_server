@@ -1433,21 +1433,33 @@ app.get('/api/balances', async (req, res) => {
   }
 });
 
-// GET expiring soon users (expiring TOMORROW)
+// GET expiring soon users
+// Supports optional ?date=YYYY-MM-DD (calendar day in PKT). If absent, defaults to TOMORROW.
 app.get('/api/users/expiring-soon', async (req, res) => {
   try {
     const usersCollection = db.collection('users');
-    // Use PKT (UTC+05:00) day math so tomorrow is calculated for your timezone
+    // Use PKT (UTC+05:00) day math so the calendar day uses your timezone
     const PKT_OFFSET_MIN = 5 * 60;
     const nowUTC = new Date();
     const nowInPKT = new Date(nowUTC.getTime() + PKT_OFFSET_MIN * 60000);
     const todayY = nowInPKT.getUTCFullYear();
     const todayM = nowInPKT.getUTCMonth();
     const todayD = nowInPKT.getUTCDate();
-    const tomorrowInPKT = new Date(Date.UTC(todayY, todayM, todayD) + 24 * 60 * 60 * 1000);
-    const tomorrowY = tomorrowInPKT.getUTCFullYear();
-    const tomorrowM = tomorrowInPKT.getUTCMonth();
-    const tomorrowD = tomorrowInPKT.getUTCDate();
+    
+    // Determine target calendar day (PKT) from query or default to tomorrow
+    const dateParam = req.query.date; // YYYY-MM-DD
+    let targetY, targetM, targetD;
+    if (dateParam && /^\d{4}-\d{2}-\d{2}$/.test(String(dateParam))) {
+      const [yyyy, mm, dd] = String(dateParam).split('-');
+      targetY = parseInt(yyyy, 10);
+      targetM = parseInt(mm, 10) - 1; // JS months 0-based
+      targetD = parseInt(dd, 10);
+    } else {
+      const tomorrowInPKT = new Date(Date.UTC(todayY, todayM, todayD) + 24 * 60 * 60 * 1000);
+      targetY = tomorrowInPKT.getUTCFullYear();
+      targetM = tomorrowInPKT.getUTCMonth();
+      targetD = tomorrowInPKT.getUTCDate();
+    }
 
     // Fetch ALL users (paid/partial/unpaid/pending) and non-inactive users, filter expiry by JS supporting string dates
     // NOTE: Include unpaid and pending so "Pay Later" and checkbox users appear in expiring soon based on date
@@ -1491,7 +1503,7 @@ app.get('/api/users/expiring-soon', async (req, res) => {
 
     const filtered = usersAll
       .map(u => ({ u, ymd: parseExpiryYMD(u.expiryDate) }))
-      .filter(({ ymd }) => ymd && ymd.y === tomorrowY && ymd.m === tomorrowM && ymd.d === tomorrowD)
+      .filter(({ ymd }) => ymd && ymd.y === targetY && ymd.m === targetM && ymd.d === targetD)
       .sort((a, b) => {
         // Sort by calendar day
         if (!a.ymd || !b.ymd) return 0;
