@@ -339,20 +339,70 @@ app.post('/api/users', async (req, res) => {
       paymentType
     });
     
-    // Determine payment status based on paymentType or explicit status
-    let paymentStatus = 'unpaid'; // Default for "Pay Later"
+    // Parse expiry date to check if it's future
+    const PKT_OFFSET_MIN = 5 * 60;
+    const nowUTC = new Date();
+    const nowInPKT = new Date(nowUTC.getTime() + PKT_OFFSET_MIN * 60000);
+    const todayY = nowInPKT.getUTCFullYear();
+    const todayM = nowInPKT.getUTCMonth();
+    const todayD = nowInPKT.getUTCDate();
+    
+    const parseExpiryDate = (expStr) => {
+      if (!expStr) return null;
+      const parts = String(expStr).split('-');
+      if (parts.length === 3) {
+        const d = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10) - 1;
+        const y = parseInt(parts[2], 10);
+        if (!isNaN(d) && !isNaN(m) && !isNaN(y)) {
+          return { y, m, d };
+        }
+      }
+      return null;
+    };
+    
+    const expiryYMD = parseExpiryDate(expiryDate);
+    const isFutureExpiry = expiryYMD && (
+      expiryYMD.y > todayY ||
+      (expiryYMD.y === todayY && expiryYMD.m > todayM) ||
+      (expiryYMD.y === todayY && expiryYMD.m === todayM && expiryYMD.d > todayD)
+    );
+    
+    console.log('📅 Expiry Date Check:', {
+      expiryDate,
+      expiryYMD,
+      todayYMD: { y: todayY, m: todayM, d: todayD },
+      isFutureExpiry
+    });
+    
+    // Determine payment status
+    let paymentStatus = 'unpaid'; // Default
     let paidAmount = 0;
     let remainingAmount = totalAmountForAllMonths;
     
-    // If status is explicitly set to 'pending', use that (for disable paid/unpaid checkbox)
+    // Payment status logic:
+    // - Pay Now: paid/partial (shows in Paid + Expiring Soon)
+    // - Pay Later: pending if future, unpaid if today/past (shows in Expiring Soon only until expiry)
+    // - Checkbox: pending (shows in Expiring Soon only)
     if (status === 'pending') {
+      // Explicit pending (checkbox)
       paymentStatus = 'pending';
-      console.log('✅ Using pending status - customer will appear in Expiring Soon only');
+      console.log('✅ Checkbox: pending status');
     } else if (paymentType === 'now') {
-      // For "Pay Now", first month is paid, remaining months are pending
+      // Pay Now: Always paid/partial (even with future expiry)
       paymentStatus = numberOfMonths > 1 ? 'partial' : 'paid';
-      paidAmount = monthlyFeeAfterDiscount; // Only first month paid
-      remainingAmount = totalAmountForAllMonths - monthlyFeeAfterDiscount; // Remaining months
+      paidAmount = monthlyFeeAfterDiscount;
+      remainingAmount = totalAmountForAllMonths - monthlyFeeAfterDiscount;
+      console.log('✅ Pay Now: paid/partial status (shows in Paid + Expiring Soon)');
+    } else if (paymentType === 'later') {
+      // Pay Later: pending if future, unpaid if today/past
+      if (isFutureExpiry) {
+        paymentStatus = 'pending';
+        console.log('✅ Pay Later + Future expiry: pending (shows only in Expiring Soon)');
+      } else {
+        paymentStatus = 'unpaid';
+        console.log('✅ Pay Later + Today/Past expiry: unpaid');
+      }
     }
     
     console.log('📊 Final Payment Status:', {
@@ -433,7 +483,7 @@ app.get('/api/users', async (req, res) => {
       };
     }
     
-    const users = await usersCollection.find(query).sort({ createdAt: -1 }).toArray();
+    const users = await usersCollection.find(query).sort({ createdAt: 1 }).toArray();
     res.status(200).json({
       success: true,
       count: users.length,
