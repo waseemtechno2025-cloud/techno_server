@@ -1948,9 +1948,7 @@ app.put('/api/vouchers/:id', async (req, res) => {
 // GET user transaction history
 app.get('/api/users/:id/transactions', async (req, res) => {
   try {
-    // ... (rest of the code remains the same)
-      });
-    }
+    
 
     const user = await usersCollection.findOne({ _id: new ObjectId(req.params.id) });
     if (!user) {
