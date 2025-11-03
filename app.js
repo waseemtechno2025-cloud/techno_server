@@ -2129,7 +2129,7 @@ const checkExpiringUsers = async () => {
   }
 };
 
-// Function to move TODAY's expiring users to unpaid status and create next month's voucher
+// Function to move expired users (TODAY or PAST) to unpaid status and create next month's voucher
 // RECURRING CYCLE FLOW:
 // 1. User added: 28/10/2025 (recharge) → 28/11/2025 (expiry) → Status: PAID
 // 2. On 27/11/2025: User shows in "Expiring Soon" (1 day before expiry)
@@ -2141,9 +2141,10 @@ const checkExpiringUsers = async () => {
 // 5. On 27/12/2025: Shows in "Expiring Soon" again
 // 6. On 28/12/2025: Repeats cycle (creates January voucher, expiry → 28/01/2026)
 // 7. Transaction history shows all months: November, December, January, etc.
+// ALSO processes PAST expiry dates (e.g., user added with 3/11 to 4/11 on 4/11 midnight)
 const moveTodayExpiredToUnpaid = async () => {
   try {
-    console.log('🕐 Running scheduled task: Moving TODAY expiring users to unpaid...');
+    console.log('🕐 Running scheduled task: Moving TODAY/PAST expiring users to unpaid...');
     
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -2193,12 +2194,20 @@ const moveTodayExpiredToUnpaid = async () => {
       return null;
     };
 
+    // Filter users whose expiry is TODAY or PAST (handles missed processing)
+    const isDateLTE = (ymd, refY, refM, refD) => {
+      if (ymd.y < refY) return true;
+      if (ymd.y === refY && ymd.m < refM) return true;
+      if (ymd.y === refY && ymd.m === refM && ymd.d <= refD) return true;
+      return false;
+    };
+
     const expiredUsers = usersAll
       .map(u => ({ u, ymd: parseExpiryYMD(u.expiryDate) }))
-      .filter(({ ymd }) => ymd && ymd.y === todayY && ymd.m === todayM && ymd.d === todayD)
+      .filter(({ ymd }) => ymd && isDateLTE(ymd, todayY, todayM, todayD))
       .map(({ u }) => u);
     
-    console.log(`✅ Found ${expiredUsers.length} users expiring today (will create next month voucher)`);
+    console.log(`✅ Found ${expiredUsers.length} users expiring today or earlier (will create next month voucher)`);
     
     if (expiredUsers.length > 0) {
       // Process each user: move to unpaid and create next month's voucher
@@ -2379,6 +2388,27 @@ const initializeScheduledTasks = () => {
   console.log('   → 8:00 PM: Check and send payment reminders');
   console.log('   → On startup: Check and send any missed reminders');
 };
+
+// ============ ADMIN TRIGGERS (ON-DEMAND) ============
+// Manually trigger expiry processing now (useful since cron runs only at noon)
+app.post('/api/admin/run-expiry-processing', ensureDbConnection, async (req, res) => {
+  try {
+    console.log('⚙️ Admin: Running expiry processing now...');
+    await moveTodayExpiredToUnpaid();
+    await checkTomorrowExpiringUsers();
+    res.status(200).json({
+      success: true,
+      message: 'Expiry processing executed'
+    });
+  } catch (error) {
+    console.error('❌ Admin run-expiry-processing failed:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to run expiry processing',
+      error: error.message
+    });
+  }
+});
 
 // ============ PAYMENT REMINDER ENDPOINTS ============
 
