@@ -1082,8 +1082,8 @@ app.get('/api/dashboard/stats', async (req, res) => {
       ]
     });
     
-    // Expiring soon (TOMORROW) - include paid/partial/unpaid users based on expiry date
-    // NOTE: Include unpaid so "Pay Later" users also count when expiring tomorrow
+    // Expiring soon (TOMORROW) - include paid/partial/unpaid/pending users based on expiry date
+    // NOTE: Include unpaid and pending so "Pay Later" and checkbox users also count when expiring tomorrow
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
@@ -1092,7 +1092,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
     endOfTomorrow.setHours(23, 59, 59, 999);
     
     const expiringSoon = await usersCollection.countDocuments({
-      status: { $in: ['paid', 'partial', 'unpaid'] },
+      status: { $in: ['paid', 'partial', 'unpaid', 'pending'] },
       expiryDate: { 
         $gte: tomorrow.toISOString(), 
         $lte: endOfTomorrow.toISOString() 
@@ -1449,10 +1449,10 @@ app.get('/api/users/expiring-soon', async (req, res) => {
     const tomorrowM = tomorrowInPKT.getUTCMonth();
     const tomorrowD = tomorrowInPKT.getUTCDate();
 
-    // Fetch ALL users (paid/partial/unpaid) and non-inactive users, filter expiry by JS supporting string dates
-    // NOTE: Include unpaid users so "Pay Later" users appear in expiring soon based on date
+    // Fetch ALL users (paid/partial/unpaid/pending) and non-inactive users, filter expiry by JS supporting string dates
+    // NOTE: Include unpaid and pending so "Pay Later" and checkbox users appear in expiring soon based on date
     const usersAll = await usersCollection.find({
-      status: { $in: ['paid', 'partial', 'unpaid'] },
+      status: { $in: ['paid', 'partial', 'unpaid', 'pending'] },
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
@@ -1998,10 +1998,10 @@ const checkTomorrowExpiringUsers = async () => {
     const endOfTomorrow = new Date(tomorrow);
     endOfTomorrow.setHours(23, 59, 59, 999);
     
-    // Find users who are paid/partial/unpaid and expiring TOMORROW
-    // NOTE: Include unpaid so "Pay Later" users are also checked
+    // Find users who are paid/partial/unpaid/pending and expiring TOMORROW
+    // NOTE: Include unpaid and pending so "Pay Later" and checkbox users are also checked
     const expiringTomorrowUsers = await usersCollection.find({
-      status: { $in: ['paid', 'partial', 'unpaid'] },
+      status: { $in: ['paid', 'partial', 'unpaid', 'pending'] },
       expiryDate: { 
         $gte: tomorrow.toISOString(), 
         $lte: endOfTomorrow.toISOString() 
@@ -2078,10 +2078,10 @@ const moveTodayExpiredToUnpaid = async () => {
     const endOfToday = new Date(today);
     endOfToday.setHours(23, 59, 59, 999);
     
-    // Find ALL users (paid/partial/unpaid) expiring TODAY
-    // NOTE: Include unpaid so "Pay Later" users also get next month's voucher
+    // Find ALL users (paid/partial/unpaid/pending) expiring TODAY
+    // NOTE: Include unpaid and pending so "Pay Later" and checkbox users also get next month's voucher
     const expiredUsers = await usersCollection.find({
-      status: { $in: ['paid', 'partial', 'unpaid'] },
+      status: { $in: ['paid', 'partial', 'unpaid', 'pending'] },
       expiryDate: { 
         $gte: today.toISOString(),
         $lte: endOfToday.toISOString() 
