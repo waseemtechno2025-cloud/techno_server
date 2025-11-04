@@ -2448,29 +2448,11 @@ const moveTodayExpiredToUnpaid = async () => {
 
 // Initialize scheduled tasks (called after MongoDB connection)
 const initializeScheduledTasks = () => {
-  // ===== MAIN PRODUCTION TASKS =====
+  // ===== CRON DISABLED - Using External Cron Service (cron-job.org) =====
+  // External cron hits these endpoints:
+  // - https://techno-server-teal.vercel.app/api/admin/run-expiry-processing (12 PM daily)
+  // - https://techno-server-teal.vercel.app/api/admin/run-reminders (8 PM daily)
   
-  // Schedule task: Daily at noon - Check users expiring TOMORROW + Move TODAY expiring to unpaid (backup)
-  cron.schedule('0 12 * * *', () => {
-    console.log('⏰ Noon (12:00 PM) task triggered');
-    
-    // First: Check users expiring TOMORROW (for expiring-soon tab)
-    checkTomorrowExpiringUsers();
-    
-    // Second: Move TODAY's expiring users to unpaid (from expiring-soon to unpaid)
-    moveTodayExpiredToUnpaid();
-  }, {
-    timezone: "Asia/Karachi"
-  });
-
-  // ===== PAYMENT REMINDER TASK - Run at 8:00 PM daily =====
-  cron.schedule('0 20 * * *', () => {
-    console.log('⏰ 8:00 PM Reminder task triggered');
-    checkAndSendReminders();
-  }, {
-    timezone: "Asia/Karachi"
-  });
-
   // Run once on server start to check immediately
   console.log('🔄 Running initial checks on server start...');
   checkTomorrowExpiringUsers();
@@ -2479,32 +2461,60 @@ const initializeScheduledTasks = () => {
   // Check for missed reminders on server startup
   checkMissedReminders();
 
-  console.log('📅 Scheduled tasks initialized:');
-  console.log('   → 12:00 PM (noon): Check expiring users & move expired to unpaid');
-  console.log('   → 8:00 PM: Check and send payment reminders');
-  console.log('   → On startup: Check and send any missed reminders');
+  console.log('📅 Server started - Using external cron service (cron-job.org)');
+  console.log('   → Expiry processing endpoint: /api/admin/run-expiry-processing');
+  console.log('   → Reminder processing endpoint: /api/admin/run-reminders');
 };
 
-// ============ ADMIN TRIGGERS (ON-DEMAND) ============
-// Manually trigger expiry processing now (useful since cron runs only at noon)
-app.post('/api/admin/run-expiry-processing', ensureDbConnection, async (req, res) => {
+// ============ ADMIN TRIGGERS (FOR EXTERNAL CRON SERVICE) ============
+// Endpoint for expiry processing - called by cron-job.org at 12 PM daily
+// Supports both GET (for cron-job.org) and POST (for manual triggers)
+const handleExpiryProcessing = async (req, res) => {
   try {
-    console.log('⚙️ Admin: Running expiry processing now...');
+    console.log('⚙️ Expiry Processing: Running now...');
     await moveTodayExpiredToUnpaid();
     await checkTomorrowExpiringUsers();
     res.status(200).json({
       success: true,
-      message: 'Expiry processing executed'
+      message: 'Expiry processing executed successfully',
+      timestamp: new Date().toISOString()
     });
   } catch (error) {
-    console.error('❌ Admin run-expiry-processing failed:', error);
+    console.error('❌ Expiry processing failed:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to run expiry processing',
       error: error.message
     });
   }
-});
+};
+
+app.get('/api/admin/run-expiry-processing', ensureDbConnection, handleExpiryProcessing);
+app.post('/api/admin/run-expiry-processing', ensureDbConnection, handleExpiryProcessing);
+
+// Endpoint for reminder processing - called by cron-job.org at 8 PM daily
+// Supports both GET (for cron-job.org) and POST (for manual triggers)
+const handleReminderProcessing = async (req, res) => {
+  try {
+    console.log('⚙️ Reminder Processing: Running now...');
+    await checkAndSendReminders();
+    res.status(200).json({
+      success: true,
+      message: 'Reminder processing executed successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Reminder processing failed:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to run reminder processing',
+      error: error.message
+    });
+  }
+};
+
+app.get('/api/admin/run-reminders', ensureDbConnection, handleReminderProcessing);
+app.post('/api/admin/run-reminders', ensureDbConnection, handleReminderProcessing);
 
 // ============ PAYMENT REMINDER ENDPOINTS ============
 
