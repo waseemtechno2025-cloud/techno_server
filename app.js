@@ -2173,13 +2173,114 @@ const checkTomorrowExpiringUsers = async () => {
     console.log(`✅ Found ${expiringTomorrowUsers.length} users expiring TOMORROW`);
     
     if (expiringTomorrowUsers.length > 0) {
-      // Set showInExpiringSoon flag for these users
+      // Process each user: change to unpaid and create next month's voucher
       for (const user of expiringTomorrowUsers) {
+        console.log(`   - Processing ${user.userName} (expires tomorrow: ${user.expiryDate})`);
+        
+        // Parse expiry date (DD-MM-YYYY or DD/MM/YYYY)
+        const parseDate = (dateStr) => {
+          const parts = dateStr.split(/[-\/]/);
+          if (parts.length === 3) {
+            const day = parseInt(parts[0], 10);
+            const month = parseInt(parts[1], 10) - 1;
+            const year = parseInt(parts[2], 10);
+            return new Date(year, month, day);
+          }
+          return new Date(dateStr);
+        };
+        
+        const currentExpiryDate = parseDate(user.expiryDate);
+        
+        // Calculate next month's expiry date
+        const nextExpiryDate = new Date(currentExpiryDate);
+        nextExpiryDate.setMonth(nextExpiryDate.getMonth() + 1);
+        
+        // Format dates as DD-MM-YYYY
+        const formatDate = (date) => {
+          const dd = String(date.getDate()).padStart(2, '0');
+          const mm = String(date.getMonth() + 1).padStart(2, '0');
+          const yyyy = date.getFullYear();
+          return `${dd}-${mm}-${yyyy}`;
+        };
+        
+        const newExpiryDateStr = formatDate(nextExpiryDate);
+        const monthName = nextExpiryDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+        
+        console.log(`   → Creating next month voucher: ${monthName}`);
+        console.log(`   → New expiry date: ${newExpiryDateStr}`);
+        
+        // Update user status to unpaid, new expiry date, and set Expiring Soon flag
         await usersCollection.updateOne(
           { _id: user._id },
-          { $set: { showInExpiringSoon: true } }
+          { 
+            $set: { 
+              status: 'unpaid',
+              expiryDate: newExpiryDateStr,
+              showInExpiringSoon: true
+            } 
+          }
         );
-        console.log(`   ✅ ${user.userName} marked for Expiring Soon (expires: ${user.expiryDate})`);
+        
+        // Find or create voucher for this user
+        let userVoucher = await vouchersCollection.findOne({ userId: user._id.toString() });
+        
+        const packageFeePerMonth = Number(user.amount || 0);
+        const discountPerMonth = Number(user.discount || 0);
+        const remainingAfterDiscount = Math.max(0, packageFeePerMonth - discountPerMonth);
+
+        const newMonth = {
+          month: monthName,
+          packageFee: packageFeePerMonth,
+          discount: discountPerMonth,
+          paidAmount: 0,
+          remainingAmount: remainingAfterDiscount,
+          paymentMethod: 'Pending',
+          receivedBy: '',
+          paymentType: 'later',
+          status: 'unpaid',
+          description: `${monthName} - Pending Payment`,
+          date: new Date(),
+          createdAt: new Date()
+        };
+        
+        if (userVoucher) {
+          // Check if next month already exists
+          const monthExists = userVoucher.months?.some(m => m.month === monthName);
+          
+          if (!monthExists) {
+            // Add new unpaid month
+            await vouchersCollection.updateOne(
+              { userId: user._id.toString() },
+              { 
+                $push: { months: newMonth },
+                $set: { 
+                  expiryDate: newExpiryDateStr,
+                  updatedAt: new Date()
+                }
+              }
+            );
+            console.log(`   ✅ Added ${monthName} voucher to existing record`);
+          } else {
+            console.log(`   ⚠️ ${monthName} voucher already exists`);
+          }
+        } else {
+          // Create new voucher document
+          const newVoucher = {
+            userId: user._id.toString(),
+            userName: user.userName,
+            packageName: user.packageName,
+            rechargeDate: user.rechargeDate,
+            expiryDate: newExpiryDateStr,
+            months: [newMonth],
+            createdAt: new Date(),
+            updatedAt: new Date()
+          };
+          
+          await vouchersCollection.insertOne(newVoucher);
+          console.log(`   ✅ Created new voucher with ${monthName}`);
+        }
+        
+        console.log(`   ✅ ${user.userName} moved to UNPAID and marked for Expiring Soon`);
       }
     }
     
@@ -2224,19 +2325,21 @@ const checkExpiringUsers = async () => {
   }
 };
 
-// Function to move expired users (TODAY or PAST) to unpaid status and create next month's voucher
-// RECURRING CYCLE FLOW:
+// Function to remove users from Expiring Soon on their actual expiry day
+// UPDATED RECURRING CYCLE FLOW:
 // 1. User added: 28/10/2025 (recharge) → 28/11/2025 (expiry) → Status: PAID
-// 2. On 27/11/2025: User shows in "Expiring Soon" (1 day before expiry)
-// 3. On 28/11/2025 (TODAY): This function runs at noon (12:00 PM)
-//    - User moves to UNPAID status
+// 2. On 27/11/2025 (1 day before): checkTomorrowExpiringUsers() runs at 12 PM
+//    - User moves to UNPAID status immediately
 //    - Creates December voucher (unpaid)
 //    - Updates expiry to 28/12/2025
+//    - Sets showInExpiringSoon = true
+//    - User shows in both "Unpaid" and "Expiring Soon"
+// 3. On 28/11/2025 (actual expiry day): This function runs at 12 PM
+//    - Just removes showInExpiringSoon flag
+//    - User only shows in "Unpaid" (not in Expiring Soon anymore)
 // 4. User pays December: Status → PAID, shows in paid-users
-// 5. On 27/12/2025: Shows in "Expiring Soon" again
-// 6. On 28/12/2025: Repeats cycle (creates January voucher, expiry → 28/01/2026)
-// 7. Transaction history shows all months: November, December, January, etc.
-// ALSO processes PAST expiry dates (e.g., user added with 3/11 to 4/11 on 4/11 midnight)
+// 5. On 27/12/2025: Shows in "Expiring Soon" again + moves to unpaid
+// 6. Cycle repeats
 const moveTodayExpiredToUnpaid = async () => {
   try {
     console.log('🕐 Running scheduled task: Moving TODAY/PAST expiring users to unpaid...');
@@ -2302,123 +2405,24 @@ const moveTodayExpiredToUnpaid = async () => {
       .filter(({ ymd }) => ymd && isDateLTE(ymd, todayY, todayM, todayD))
       .map(({ u }) => u);
     
-    console.log(`✅ Found ${expiredUsers.length} users expiring today or earlier (will create next month voucher)`);
+    console.log(`✅ Found ${expiredUsers.length} users with expiry TODAY (will remove from Expiring Soon)`);
     
     if (expiredUsers.length > 0) {
-      // Process each user: move to unpaid and create next month's voucher
+      // Just remove showInExpiringSoon flag (voucher already created yesterday)
       for (const user of expiredUsers) {
-        console.log(`   - Processing ${user.userName} (expired: ${user.expiryDate})`);
+        console.log(`   - Removing ${user.userName} from Expiring Soon (expiry date reached: ${user.expiryDate})`);
         
-        // Parse expiry date (DD-MM-YYYY or DD/MM/YYYY)
-        const parseDate = (dateStr) => {
-          const parts = dateStr.split(/[-\/]/);
-          if (parts.length === 3) {
-            const day = parseInt(parts[0], 10);
-            const month = parseInt(parts[1], 10) - 1;
-            const year = parseInt(parts[2], 10);
-            return new Date(year, month, day);
-          }
-          return new Date(dateStr);
-        };
-        
-        const currentExpiryDate = parseDate(user.expiryDate);
-        
-        // Calculate next month's expiry date
-        const nextExpiryDate = new Date(currentExpiryDate);
-        nextExpiryDate.setMonth(nextExpiryDate.getMonth() + 1);
-        
-        // Format dates as DD-MM-YYYY
-        const formatDate = (date) => {
-          const dd = String(date.getDate()).padStart(2, '0');
-          const mm = String(date.getMonth() + 1).padStart(2, '0');
-          const yyyy = date.getFullYear();
-          return `${dd}-${mm}-${yyyy}`;
-        };
-        
-        const newExpiryDateStr = formatDate(nextExpiryDate);
-        const monthName = nextExpiryDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-        
-        console.log(`   → Creating next month voucher: ${monthName}`);
-        console.log(`   → New expiry date: ${newExpiryDateStr}`);
-        
-        // Update user status to unpaid, new expiry date, and remove from Expiring Soon
+        // Only remove the Expiring Soon flag
         await usersCollection.updateOne(
           { _id: user._id },
           { 
             $set: { 
-              status: 'unpaid',
-              expiryDate: newExpiryDateStr,
               showInExpiringSoon: false
             } 
           }
         );
         
-        // Find or create voucher for this user
-        let userVoucher = await vouchersCollection.findOne({ userId: user._id.toString() });
-        
-        const packageFeePerMonth = Number(user.amount || 0);
-        const discountPerMonth = Number(user.discount || 0);
-        const remainingAfterDiscount = Math.max(0, packageFeePerMonth - discountPerMonth);
-
-        const newMonth = {
-          month: monthName,
-          packageFee: packageFeePerMonth,
-          discount: discountPerMonth,
-          paidAmount: 0,
-          remainingAmount: remainingAfterDiscount,
-          paymentMethod: 'Pending',
-          receivedBy: '',
-          paymentType: 'later',
-          status: 'unpaid',
-          description: `${monthName} - Pending Payment`,
-          date: new Date(),
-          createdAt: new Date()
-        };
-        
-        if (userVoucher) {
-          // Check if next month already exists
-          const monthExists = userVoucher.months?.some(m => m.month === monthName);
-          
-          if (!monthExists) {
-            // Add new unpaid month
-            await vouchersCollection.updateOne(
-              { userId: user._id.toString() },
-              { 
-                $push: { months: newMonth },
-                $set: { 
-                  expiryDate: newExpiryDateStr,
-                  rechargeDate: user.rechargeDate // Keep original recharge date
-                }
-              }
-            );
-            
-            console.log(`   ✅ Added ${monthName} to voucher`);
-          } else {
-            console.log(`   ⚠️ ${monthName} already exists in voucher`);
-          }
-        } else {
-          // Create new voucher document for this user (especially for pending users)
-          console.log(`   📝 Creating new voucher for ${user.userName}`);
-          
-          const newVoucher = {
-            userId: user._id.toString(),
-            userName: user.userName,
-            rechargeDate: user.rechargeDate || formatDate(currentExpiryDate),
-            expiryDate: newExpiryDateStr,
-            packageFee: user.amount || 0,
-            paidAmount: 0,
-            remainingAmount: user.amount || 0,
-            paymentMethod: 'Pending',
-            receivedBy: '',
-            paymentType: 'later',
-            status: 'unpaid',
-            months: [newMonth],
-            createdAt: new Date()
-          };
-          
-          await vouchersCollection.insertOne(newVoucher);
-          console.log(`   ✅ Created new voucher with ${monthName}`);
-        }
+        console.log(`   ✅ ${user.userName} removed from Expiring Soon`);
       }
       
       console.log(`✅ Successfully processed ${expiredUsers.length} users`);
@@ -2453,16 +2457,13 @@ const initializeScheduledTasks = () => {
   // - https://techno-server-teal.vercel.app/api/admin/run-expiry-processing (12 PM daily)
   // - https://techno-server-teal.vercel.app/api/admin/run-reminders (8 PM daily)
   
-  // Run once on server start to check immediately
-  console.log('🔄 Running initial checks on server start...');
-  checkTomorrowExpiringUsers();
-  moveTodayExpiredToUnpaid();
+  // IMPORTANT: Do NOT run processing on server start
+  // Only external cron (cron-job.org) should trigger at scheduled times (12 PM)
+  // This prevents premature expiry processing before 12 PM
   
-  // Check for missed reminders on server startup
-  checkMissedReminders();
-
   console.log('📅 Server started - Using external cron service (cron-job.org)');
-  console.log('   → Expiry processing endpoint: /api/admin/run-expiry-processing');
+  console.log('   → Expiry processing will run at 12 PM via cron-job.org');
+  console.log('   → Endpoint: /api/admin/run-expiry-processing');
   console.log('   → Reminder processing endpoint: /api/admin/run-reminders');
 };
 
@@ -3425,6 +3426,59 @@ if (!process.env.VERCEL) {
 } else {
   console.log('Running in serverless mode (Vercel)');
 }
+
+// ============ DEBUG ENDPOINT ============
+// Check if specific user should be expired
+app.get('/api/admin/check-user-expiry/:userId', ensureDbConnection, async (req, res) => {
+  try {
+    const user = await usersCollection.findOne({ _id: new ObjectId(req.params.userId) });
+    
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    // Parse user's expiry date
+    const parseDate = (dateStr) => {
+      const parts = dateStr.split(/[-\/]/);
+      if (parts.length === 3) {
+        const day = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1;
+        const year = parseInt(parts[2], 10);
+        return new Date(year, month, day);
+      }
+      return new Date(dateStr);
+    };
+
+    const userExpiryDate = parseDate(user.expiryDate);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // PKT timezone
+    const PKT_OFFSET_MIN = 5 * 60;
+    const nowUTC = new Date();
+    const nowInPKT = new Date(nowUTC.getTime() + PKT_OFFSET_MIN * 60000);
+    
+    res.status(200).json({
+      success: true,
+      user: {
+        userName: user.userName,
+        status: user.status,
+        expiryDate: user.expiryDate,
+        showInExpiringSoon: user.showInExpiringSoon
+      },
+      debug: {
+        userExpiryDate: userExpiryDate.toISOString(),
+        todayLocal: today.toISOString(),
+        todayPKT: nowInPKT.toISOString(),
+        isExpired: userExpiryDate <= today,
+        shouldBeUnpaid: userExpiryDate <= today && user.status !== 'unpaid'
+      }
+    });
+  } catch (error) {
+    console.error('Debug error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // Export for Vercel serverless
 module.exports = app;
