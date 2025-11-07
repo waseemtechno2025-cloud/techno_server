@@ -2036,34 +2036,45 @@ app.get('/api/users/:id/transactions', async (req, res) => {
     const vouchersCollection = db.collection('vouchers');
     const vouchers = await vouchersCollection.find({
       userId: req.params.id
-    }).sort({ createdAt: 1 }).toArray();
+    }).sort({ date: 1 }).toArray(); // Sort by 'date' field instead of 'createdAt'
 
     // Build transaction history
     const transactions = [];
     let runningBalance = 0;
 
     vouchers.forEach(voucher => {
-      const date = new Date(voucher.createdAt);
-      const monthYear = date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+      // Use voucher.date if available, fallback to createdAt
+      const voucherDate = voucher.date ? new Date(voucher.date) : new Date(voucher.createdAt);
+      const monthYear = voucherDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
       
-      // Add package fee as debit
-      runningBalance -= voucher.packageFee;
+      // Calculate actual pending amount (packageFee - discount - paidAmount)
+      const packageFee = Number(voucher.packageFee || 0);
+      const discount = Number(voucher.discount || 0);
+      const paidAmount = Number(voucher.paidAmount || 0);
+      const remainingAmount = Number(voucher.remainingAmount || 0);
+      
+      // If remainingAmount is set, use it (for Pay Later vouchers)
+      // Otherwise calculate: packageFee - discount
+      const actualFee = remainingAmount > 0 ? remainingAmount + paidAmount : packageFee - discount;
+      
+      // Add package fee as debit (after discount)
+      runningBalance -= actualFee;
       transactions.push({
         date: monthYear,
-        description: `${date.toLocaleDateString('en-GB', { month: 'long' })} Fee`,
-        debit: voucher.packageFee,
+        description: voucher.month || `${voucherDate.toLocaleDateString('en-GB', { month: 'long' })} Fee`,
+        debit: actualFee,
         credit: null,
         balance: runningBalance
       });
 
       // Add payment as credit (if paid)
-      if (voucher.paidAmount > 0) {
-        runningBalance += voucher.paidAmount;
+      if (paidAmount > 0) {
+        runningBalance += paidAmount;
         transactions.push({
           date: monthYear,
           description: 'Payment Received',
           debit: null,
-          credit: voucher.paidAmount,
+          credit: paidAmount,
           balance: runningBalance
         });
       }
