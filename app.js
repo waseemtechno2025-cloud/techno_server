@@ -382,7 +382,7 @@ app.post('/api/users', async (req, res) => {
     
     // Payment status logic:
     // - Pay Now: paid/partial (shows in Paid + Expiring Soon)
-    // - Pay Later: pending if future, unpaid if today/past (shows in Expiring Soon only until expiry)
+    // - Pay Later: always unpaid (shows in Unpaid Users)
     // - Checkbox: pending (shows in Expiring Soon only)
     if (status === 'pending') {
       // Explicit pending (checkbox)
@@ -395,14 +395,9 @@ app.post('/api/users', async (req, res) => {
       remainingAmount = totalAmountForAllMonths - monthlyFeeAfterDiscount;
       console.log('✅ Pay Now: paid/partial status (shows in Paid + Expiring Soon)');
     } else if (paymentType === 'later') {
-      // Pay Later: pending if future, unpaid if today/past
-      if (isFutureExpiry) {
-        paymentStatus = 'pending';
-        console.log('✅ Pay Later + Future expiry: pending (shows only in Expiring Soon)');
-      } else {
-        paymentStatus = 'unpaid';
-        console.log('✅ Pay Later + Today/Past expiry: unpaid');
-      }
+      // Pay Later: Always unpaid (shows in Unpaid Users)
+      paymentStatus = 'unpaid';
+      console.log('✅ Pay Later: unpaid status (shows in Unpaid Users)');
     }
     
     console.log('📊 Final Payment Status:', {
