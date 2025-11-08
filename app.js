@@ -3537,6 +3537,137 @@ app.get('/api/refunds/:userId', ensureDbConnection, async (req, res) => {
   }
 });
 
+// POST process reversed payment - convert refund back to paid
+app.post('/api/refunds/process-payment', ensureDbConnection, async (req, res) => {
+  try {
+    const { userId, notes } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: 'userId is required'
+      });
+    }
+    
+    console.log(`💰 Processing reversed payment for user: ${userId}`);
+    console.log(`📝 Notes: ${notes || 'No notes'}`);
+    
+    const refundsCollection = db.collection('refunds');
+    
+    // Find all refunds for this user
+    const refunds = await refundsCollection.find({ userId }).toArray();
+    
+    if (refunds.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No refund records found for this user'
+      });
+    }
+    
+    console.log(`📋 Found ${refunds.length} refund record(s)`);
+    
+    let processedMonths = 0;
+    let totalAmount = 0;
+    
+    // Process each refund
+    for (const refund of refunds) {
+      const voucherId = refund.voucherId;
+      console.log(`🔍 Processing refund with voucherId: ${voucherId}`);
+      
+      // Find the voucher by _id
+      const voucher = await vouchersCollection.findOne({ _id: new ObjectId(voucherId) });
+      
+      if (!voucher) {
+        console.log(`⚠️ Voucher not found: ${voucherId}`);
+        continue;
+      }
+      
+      console.log(`✅ Found voucher for user: ${voucher.userName}`);
+      
+      // Process each refunded month
+      if (refund.refundedMonths && Array.isArray(refund.refundedMonths)) {
+        for (const refundedMonth of refund.refundedMonths) {
+          console.log(`📅 Processing month: ${refundedMonth.month}`);
+          
+          // Find matching month in voucher
+          const monthIndex = voucher.months.findIndex(m => m.month === refundedMonth.month);
+          
+          if (monthIndex !== -1) {
+            // Update month status to 'paid'
+            await vouchersCollection.updateOne(
+              { 
+                _id: new ObjectId(voucherId),
+                'months.month': refundedMonth.month
+              },
+              {
+                $set: {
+                  'months.$.status': 'paid',
+                  'months.$.paidAmount': refundedMonth.packageFee - (refundedMonth.discount || 0),
+                  'months.$.remainingAmount': 0,
+                  'months.$.paymentMethod': 'Cash',
+                  'months.$.receivedBy': 'Admin',
+                  'months.$.description': `${refundedMonth.month} - Reversed payment processed${notes ? ': ' + notes : ''}`
+                }
+              }
+            );
+            
+            processedMonths++;
+            totalAmount += (refundedMonth.packageFee - (refundedMonth.discount || 0));
+            console.log(`✅ Updated ${refundedMonth.month} to paid status`);
+          } else {
+            console.log(`⚠️ Month not found in voucher: ${refundedMonth.month}`);
+          }
+        }
+      }
+      
+      // Remove the refund record
+      await refundsCollection.deleteOne({ _id: refund._id });
+      console.log(`🗑️ Removed refund record`);
+    }
+    
+    // Update user status if needed
+    const user = await usersCollection.findOne({ _id: new ObjectId(userId) });
+    if (user) {
+      // Check if there are any remaining unpaid months
+      const userVouchers = await vouchersCollection.find({ userId }).toArray();
+      let hasUnpaidMonths = false;
+      
+      for (const v of userVouchers) {
+        if (v.months && v.months.some(m => m.status === 'unpaid' || (m.remainingAmount && m.remainingAmount > 0))) {
+          hasUnpaidMonths = true;
+          break;
+        }
+      }
+      
+      // If no unpaid months, update user status to paid
+      if (!hasUnpaidMonths) {
+        await usersCollection.updateOne(
+          { _id: new ObjectId(userId) },
+          { $set: { status: 'paid' } }
+        );
+        console.log(`✅ Updated user status to 'paid'`);
+      }
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: `Successfully processed ${processedMonths} reversed payment(s)`,
+      data: {
+        processedMonths,
+        totalAmount,
+        notes
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error processing reversed payment:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error processing reversed payment',
+      error: error.message
+    });
+  }
+});
+
 // DELETE voucher
 app.delete('/api/vouchers/:id', ensureDbConnection, async (req, res) => {
   try {
