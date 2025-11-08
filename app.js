@@ -28,6 +28,9 @@ let transactionsCollection;
 let isConnected = false;
 let client;
 
+// PKT Timezone constant (UTC+05:00)
+const PKT_OFFSET_MIN = 5 * 60;
+
 // Connect to MongoDB with connection reuse for serverless
 async function connectToDatabase() {
   if (isConnected && db) {
@@ -340,7 +343,6 @@ app.post('/api/users', async (req, res) => {
     });
     
     // Parse expiry date to check if it's future
-    const PKT_OFFSET_MIN = 5 * 60;
     const nowUTC = new Date();
     const nowInPKT = new Date(nowUTC.getTime() + PKT_OFFSET_MIN * 60000);
     const todayY = nowInPKT.getUTCFullYear();
@@ -407,7 +409,6 @@ app.post('/api/users', async (req, res) => {
     });
     
     // Check if expiry date is tomorrow (to show in Expiring Soon immediately)
-    const PKT_OFFSET_MIN = 5 * 60;
     const nowUTC = new Date();
     const nowInPKT = new Date(nowUTC.getTime() + PKT_OFFSET_MIN * 60000);
     const todayY = nowInPKT.getUTCFullYear();
@@ -1614,7 +1615,6 @@ app.get('/api/users/expiring-soon', async (req, res) => {
   try {
     const usersCollection = db.collection('users');
     // Use PKT (UTC+05:00) day math so the calendar day uses your timezone
-    const PKT_OFFSET_MIN = 5 * 60;
     const nowUTC = new Date();
     const nowInPKT = new Date(nowUTC.getTime() + PKT_OFFSET_MIN * 60000);
     const todayY = nowInPKT.getUTCFullYear();
@@ -2278,7 +2278,6 @@ const checkTomorrowExpiringUsers = async () => {
     console.log('🕐 Running scheduled task: Checking users expiring TOMORROW...');
     
     // Use PKT timezone
-    const PKT_OFFSET_MIN = 5 * 60;
     const nowUTC = new Date();
     const nowInPKT = new Date(nowUTC.getTime() + PKT_OFFSET_MIN * 60000);
     const todayY = nowInPKT.getUTCFullYear();
@@ -2422,7 +2421,6 @@ const moveTodayExpiredToUnpaid = async () => {
     
     // Find ALL users (paid/partial/unpaid/pending) and match expiry by PKT calendar-day equality
     // NOTE: Do not use ISO range because expiryDate is stored as string (DD-MM-YYYY or DD/MM/YYYY)
-    const PKT_OFFSET_MIN = 5 * 60;
     const nowUTC = new Date();
     const nowInPKT = new Date(nowUTC.getTime() + PKT_OFFSET_MIN * 60000);
     const todayY = nowInPKT.getUTCFullYear();
@@ -3882,7 +3880,6 @@ app.get('/api/admin/check-user-expiry/:userId', ensureDbConnection, async (req, 
     today.setHours(0, 0, 0, 0);
     
     // PKT timezone
-    const PKT_OFFSET_MIN = 5 * 60;
     const nowUTC = new Date();
     const nowInPKT = new Date(nowUTC.getTime() + PKT_OFFSET_MIN * 60000);
     
