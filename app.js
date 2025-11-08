@@ -3604,6 +3604,10 @@ app.post('/api/refunds/process-payment', ensureDbConnection, async (req, res) =>
                   'months.$.paymentMethod': 'Cash',
                   'months.$.receivedBy': 'Admin',
                   'months.$.description': `${refundedMonth.month} - Reversed payment processed${notes ? ': ' + notes : ''}`
+                },
+                $unset: {
+                  'months.$.refundDate': '',
+                  'months.$.refundedAmount': ''
                 }
               }
             );
@@ -3622,28 +3626,55 @@ app.post('/api/refunds/process-payment', ensureDbConnection, async (req, res) =>
       console.log(`🗑️ Removed refund record`);
     }
     
-    // Update user status if needed
+    // Update user status and amounts
     const user = await usersCollection.findOne({ _id: new ObjectId(userId) });
     if (user) {
-      // Check if there are any remaining unpaid months
+      // Recalculate amounts from vouchers (excluding reversed months)
       const userVouchers = await vouchersCollection.find({ userId }).toArray();
+      let totalPaid = 0;
+      let totalRemaining = 0;
       let hasUnpaidMonths = false;
       
       for (const v of userVouchers) {
-        if (v.months && v.months.some(m => m.status === 'unpaid' || (m.remainingAmount && m.remainingAmount > 0))) {
-          hasUnpaidMonths = true;
-          break;
+        if (v.months && Array.isArray(v.months)) {
+          // Only count non-reversed months
+          const nonReversedMonths = v.months.filter(m => {
+            const isReversed = !!(m.refundDate || m.refundedAmount);
+            return !isReversed;
+          });
+          
+          nonReversedMonths.forEach(m => {
+            totalPaid += Number(m.paidAmount || 0);
+            totalRemaining += Number(m.remainingAmount || 0);
+          });
+          
+          // Check if there are any remaining unpaid months
+          if (nonReversedMonths.some(m => m.status === 'unpaid' || (m.remainingAmount && m.remainingAmount > 0))) {
+            hasUnpaidMonths = true;
+          }
         }
       }
       
-      // If no unpaid months, update user status to paid
-      if (!hasUnpaidMonths) {
-        await usersCollection.updateOne(
-          { _id: new ObjectId(userId) },
-          { $set: { status: 'paid' } }
-        );
-        console.log(`✅ Updated user status to 'paid'`);
+      // Determine new status
+      let newStatus = 'unpaid';
+      if (totalRemaining === 0 && totalPaid > 0) {
+        newStatus = 'paid';
+      } else if (totalPaid > 0) {
+        newStatus = 'partial';
       }
+      
+      // Update user with new amounts and status
+      await usersCollection.updateOne(
+        { _id: new ObjectId(userId) },
+        { 
+          $set: { 
+            status: newStatus,
+            paidAmount: totalPaid,
+            remainingAmount: totalRemaining
+          } 
+        }
+      );
+      console.log(`✅ Updated user status to '${newStatus}', paidAmount: ${totalPaid}, remainingAmount: ${totalRemaining}`);
     }
     
     res.status(200).json({
