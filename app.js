@@ -3449,6 +3449,22 @@ app.put('/api/vouchers/:id', ensureDbConnection, async (req, res) => {
         
         const insertResult = await refundsCollection.insertOne(refundRecord);
         console.log(`✅ REFUND SAVED: ${user?.userName} - ${reversedMonths.length} months - ID: ${insertResult.insertedId}`);
+        
+        // Check if ALL months are now reversed
+        const totalMonths = updateData.months.length;
+        const allReversed = updateData.months.every(m => m.status === 'reversed');
+        
+        if (allReversed) {
+          console.log(`🔄 ALL ${totalMonths} months reversed - removing user from unpaid list`);
+          // Change user status from 'unpaid' to 'reversed' so they don't appear in unpaid section
+          await usersCollection.updateOne(
+            { _id: new ObjectId(voucher.userId) },
+            { $set: { status: 'reversed' } }
+          );
+          console.log(`✅ User ${user?.userName} marked as 'reversed' (excluded from unpaid)`);
+        } else {
+          console.log(`⚠️ Partial refund: ${reversedMonths.length}/${totalMonths} months reversed - user stays in unpaid`);
+        }
       }
     }
     
