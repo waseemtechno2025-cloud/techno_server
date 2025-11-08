@@ -407,37 +407,6 @@ app.post('/api/users', async (req, res) => {
       paidAmount,
       remainingAmount
     });
-    
-    // Check if expiry date is tomorrow (to show in Expiring Soon immediately)
-    // Reuse existing todayY, todayM, todayD from above
-    const tomorrowDate = new Date(Date.UTC(todayY, todayM, todayD + 1));
-    const tomorrowY = tomorrowDate.getUTCFullYear();
-    const tomorrowM = tomorrowDate.getUTCMonth();
-    const tomorrowD = tomorrowDate.getUTCDate();
-    
-    let showInExpiringSoon = false;
-    if (expiryDate) {
-      const parseExpiryYMD = (exp) => {
-        if (typeof exp === 'string') {
-          const parts = exp.split('-');
-          if (parts.length === 3) {
-            const d = parseInt(parts[0], 10);
-            const m = parseInt(parts[1], 10) - 1;
-            const y = parseInt(parts[2], 10);
-            if (!isNaN(d) && !isNaN(m) && !isNaN(y)) {
-              return { y, m, d };
-            }
-          }
-        }
-        return null;
-      };
-      
-      const expiryYMD = parseExpiryYMD(expiryDate);
-      if (expiryYMD && expiryYMD.y === tomorrowY && expiryYMD.m === tomorrowM && expiryYMD.d === tomorrowD) {
-        showInExpiringSoon = true;
-        console.log('✅ Expiry date is TOMORROW - setting showInExpiringSoon = true');
-      }
-    }
 
     const newUser = {
       userName: userName.trim(),
@@ -459,7 +428,7 @@ app.post('/api/users', async (req, res) => {
       serviceStatus: 'active', // Service status: always active for new users
       paidAmount: paidAmount,
       remainingAmount: remainingAmount,
-      showInExpiringSoon: showInExpiringSoon, // Set to true if expiry is tomorrow
+      showInExpiringSoon: false, // Will be set to true by cron job at 12 PM
       createdAt: new Date()
     };
 
