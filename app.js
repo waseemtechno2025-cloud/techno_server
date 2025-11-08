@@ -1401,35 +1401,30 @@ app.get('/api/users/unpaid', async (req, res) => {
   }
 });
 
-// GET reversed users (refunded months)
+// GET reversed users (refunded months) - FROM REFUNDS COLLECTION
 app.get('/api/users/reversed', async (req, res) => {
   try {
-    const vouchersCollection = db.collection('vouchers');
+    const refundsCollection = db.collection('refunds');
     const usersCollection = db.collection('users');
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const expiryDate = req.query.expiryDate; // YYYY-MM-DD format
     
-    console.log('🔄 Fetching reversed (refunded) users...');
+    console.log('🔄 Fetching reversed (refunded) users from REFUNDS collection...');
     
-    // Find all vouchers that have at least one reversed month
-    let voucherQuery = {
-      'months.status': 'reversed'
-    };
+    // Find all refunds
+    let refundQuery = {};
     
-    // Apply expiry date filter if provided
+    // Apply expiry date filter if provided (optional - refunds don't have expiry date)
+    // This filter is kept for API compatibility but may not be used
     if (expiryDate) {
-      const [year, month, day] = expiryDate.split('-');
-      const dateWithHyphen = `${day}-${month}-${year}`;
-      const dateWithSlash = `${day}/${month}/${year}`;
-      console.log(`Date filter: ${expiryDate} → ${dateWithHyphen} or ${dateWithSlash}`);
-      voucherQuery.expiryDate = { $in: [dateWithHyphen, dateWithSlash] };
+      console.log(`Date filter: ${expiryDate} (not applied to refunds collection)`);
     }
     
-    const vouchersWithReversed = await vouchersCollection.find(voucherQuery).toArray();
-    console.log(`Found ${vouchersWithReversed.length} vouchers with reversed months`);
+    const allRefunds = await refundsCollection.find(refundQuery).toArray();
+    console.log(`📋 Found ${allRefunds.length} refund records`);
     
-    if (vouchersWithReversed.length === 0) {
+    if (allRefunds.length === 0) {
       return res.status(200).json({
         success: true,
         data: [],
@@ -1439,9 +1434,9 @@ app.get('/api/users/reversed', async (req, res) => {
       });
     }
     
-    // Get unique user IDs
-    const userIds = [...new Set(vouchersWithReversed.map(v => v.userId))];
-    console.log(`Unique users with reversed months: ${userIds.length}`);
+    // Get unique user IDs from refunds
+    const userIds = [...new Set(allRefunds.map(r => r.userId))];
+    console.log(`👥 Unique users with refunds: ${userIds.length}`);
     
     // Fetch user details with pagination
     const totalCount = userIds.length;
@@ -1457,18 +1452,20 @@ app.get('/api/users/reversed', async (req, res) => {
     
     // Add filterType and calculate reversed amount for each user
     const usersWithReversedData = users.map(user => {
-      const userVouchers = vouchersWithReversed.filter(v => v.userId === user._id.toString());
+      const userRefunds = allRefunds.filter(r => r.userId === user._id.toString());
       let reversedAmount = 0;
       
-      userVouchers.forEach(voucher => {
-        if (voucher.months && Array.isArray(voucher.months)) {
-          voucher.months.forEach(month => {
-            if (month.status === 'reversed') {
-              reversedAmount += Number(month.remainingAmount || 0);
-            }
+      // Calculate total refunded amount from all refund records
+      userRefunds.forEach(refund => {
+        if (refund.refundedMonths && Array.isArray(refund.refundedMonths)) {
+          refund.refundedMonths.forEach(month => {
+            // Use refundedAmount which is (paidAmount + remainingAmount)
+            reversedAmount += Number(month.refundedAmount || 0);
           });
         }
       });
+      
+      console.log(`💰 User ${user.userName}: Total refunded = Rs ${reversedAmount}`);
       
       return {
         ...user,
@@ -1478,7 +1475,7 @@ app.get('/api/users/reversed', async (req, res) => {
       };
     });
     
-    console.log(`Returning ${usersWithReversedData.length} reversed users for page ${page}`);
+    console.log(`✅ Returning ${usersWithReversedData.length} reversed users for page ${page}`);
     
     res.status(200).json({
       success: true,
@@ -1488,7 +1485,7 @@ app.get('/api/users/reversed', async (req, res) => {
       limit
     });
   } catch (error) {
-    console.error('Error fetching reversed users:', error);
+    console.error('❌ Error fetching reversed users:', error);
     res.status(500).json({
       success: false,
       message: 'Error fetching reversed users',
