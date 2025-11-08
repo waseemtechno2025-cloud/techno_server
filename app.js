@@ -1936,6 +1936,35 @@ app.post('/api/vouchers', async (req, res) => {
       const existingVoucher = await vouchersCollection.findOne({ userId });
       
       if (existingVoucher) {
+        // Check if any months being paid have reversed status
+        const refundsCollection = db.collection('refunds');
+        const reversedMonthsPaid = months.filter(m => {
+          // Find if this month exists in voucher with reversed status
+          const existingMonth = existingVoucher.months?.find(em => em.month === m.month);
+          return existingMonth && existingMonth.status === 'reversed' && m.status === 'paid';
+        });
+        
+        // If reversed months are being paid, delete from refunds collection
+        if (reversedMonthsPaid.length > 0) {
+          console.log(`🔄 Marking ${reversedMonthsPaid.length} reversed months as paid`);
+          
+          // Delete refund records for these months
+          for (const month of reversedMonthsPaid) {
+            await refundsCollection.updateMany(
+              { userId, 'refundedMonths.month': month.month },
+              { $pull: { refundedMonths: { month: month.month } } }
+            );
+          }
+          
+          // Remove empty refund records
+          await refundsCollection.deleteMany({ 
+            userId, 
+            refundedMonths: { $size: 0 } 
+          });
+          
+          console.log(`✅ Removed reversed months from refunds collection`);
+        }
+        
         // Update existing voucher with new months array
         const result = await vouchersCollection.updateOne(
           { userId },
@@ -3380,6 +3409,58 @@ app.put('/api/vouchers/:id', ensureDbConnection, async (req, res) => {
     }
 
     const updateData = req.body;
+    
+    // Check if this is a refund operation (has reversed months)
+    if (updateData.months && updateData.isRefund) {
+      console.log('🔄 Refund operation detected');
+      
+      // Get the voucher to access user info
+      const voucher = await vouchersCollection.findOne({ _id: new ObjectId(req.params.id) });
+      
+      if (!voucher) {
+        return res.status(404).json({
+          success: false,
+          message: 'Voucher not found'
+        });
+      }
+      
+      // Get user details
+      const user = await usersCollection.findOne({ _id: new ObjectId(voucher.userId) });
+      
+      // Find months that were set to reversed
+      const reversedMonths = updateData.months.filter(m => m.status === 'reversed');
+      
+      if (reversedMonths.length > 0) {
+        console.log(`💾 Creating refund record for ${reversedMonths.length} months`);
+        
+        // Create refund collection entry
+        const refundsCollection = db.collection('refunds');
+        const refundRecord = {
+          userId: voucher.userId,
+          voucherId: voucher._id.toString(),
+          userName: user?.userName || 'Unknown',
+          packageName: user?.packageName || 'Unknown',
+          refundedMonths: reversedMonths.map(m => ({
+            month: m.month,
+            packageFee: m.packageFee,
+            discount: m.discount || 0,
+            refundedAmount: m.refundedAmount || m.paidAmount || 0,
+            remainingAmount: m.remainingAmount,
+            refundDate: m.refundDate || new Date().toISOString()
+          })),
+          status: 'reversed',
+          createdAt: new Date(),
+          totalRefundedAmount: reversedMonths.reduce((sum, m) => sum + (m.refundedAmount || m.paidAmount || 0), 0)
+        };
+        
+        await refundsCollection.insertOne(refundRecord);
+        console.log('✅ Refund record created:', refundRecord);
+      }
+    }
+    
+    // Remove isRefund flag before updating voucher
+    delete updateData.isRefund;
+    
     const result = await vouchersCollection.updateOne(
       { _id: new ObjectId(req.params.id) },
       { $set: updateData }
@@ -3401,6 +3482,31 @@ app.put('/api/vouchers/:id', ensureDbConnection, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error updating voucher',
+      error: error.message
+    });
+  }
+});
+
+// GET refunds for a user
+app.get('/api/refunds/:userId', ensureDbConnection, async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const refundsCollection = db.collection('refunds');
+    
+    // Find all refunds for this user
+    const refunds = await refundsCollection.find({ userId }).toArray();
+    
+    console.log(`📋 Found ${refunds.length} refund records for user ${userId}`);
+    
+    res.status(200).json({
+      success: true,
+      data: refunds
+    });
+  } catch (error) {
+    console.error('Error fetching refunds:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching refunds',
       error: error.message
     });
   }
