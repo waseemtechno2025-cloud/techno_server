@@ -3412,7 +3412,7 @@ app.put('/api/vouchers/:id', ensureDbConnection, async (req, res) => {
     
     // Check if this is a refund operation (has reversed months)
     if (updateData.months && updateData.isRefund) {
-      console.log('🔄 Refund operation detected');
+      console.log('🔄 REFUND DETECTED');
       
       // Get the voucher to access user info
       const voucher = await vouchersCollection.findOne({ _id: new ObjectId(req.params.id) });
@@ -3431,8 +3431,6 @@ app.put('/api/vouchers/:id', ensureDbConnection, async (req, res) => {
       const reversedMonths = updateData.months.filter(m => m.status === 'reversed');
       
       if (reversedMonths.length > 0) {
-        console.log(`💾 Creating refund record for ${reversedMonths.length} months`);
-        
         // Create refund collection entry
         const refundsCollection = db.collection('refunds');
         const refundRecord = {
@@ -3453,8 +3451,8 @@ app.put('/api/vouchers/:id', ensureDbConnection, async (req, res) => {
           totalRefundedAmount: reversedMonths.reduce((sum, m) => sum + (m.refundedAmount || m.paidAmount || 0), 0)
         };
         
-        await refundsCollection.insertOne(refundRecord);
-        console.log('✅ Refund record created:', refundRecord);
+        const insertResult = await refundsCollection.insertOne(refundRecord);
+        console.log(`✅ REFUND SAVED: ${user?.userName} - ${reversedMonths.length} months - ID: ${insertResult.insertedId}`);
       }
     }
     
@@ -3482,6 +3480,33 @@ app.put('/api/vouchers/:id', ensureDbConnection, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error updating voucher',
+      error: error.message
+    });
+  }
+});
+
+// POST create refund
+app.post('/api/refunds', ensureDbConnection, async (req, res) => {
+  try {
+    const refundsCollection = db.collection('refunds');
+    const refundData = req.body;
+    
+    const result = await refundsCollection.insertOne({
+      ...refundData,
+      createdAt: new Date()
+    });
+    
+    console.log(`✅ REFUND SAVED: ${refundData.userName} - ${refundData.refundedMonths?.length || 0} months`);
+    
+    res.status(201).json({
+      success: true,
+      data: { _id: result.insertedId, ...refundData }
+    });
+  } catch (error) {
+    console.error('Error creating refund:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creating refund',
       error: error.message
     });
   }
