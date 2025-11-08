@@ -1401,6 +1401,102 @@ app.get('/api/users/unpaid', async (req, res) => {
   }
 });
 
+// GET reversed users (refunded months)
+app.get('/api/users/reversed', async (req, res) => {
+  try {
+    const vouchersCollection = db.collection('vouchers');
+    const usersCollection = db.collection('users');
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const expiryDate = req.query.expiryDate; // YYYY-MM-DD format
+    
+    console.log('🔄 Fetching reversed (refunded) users...');
+    
+    // Find all vouchers that have at least one reversed month
+    let voucherQuery = {
+      'months.status': 'reversed'
+    };
+    
+    // Apply expiry date filter if provided
+    if (expiryDate) {
+      const [year, month, day] = expiryDate.split('-');
+      const dateWithHyphen = `${day}-${month}-${year}`;
+      const dateWithSlash = `${day}/${month}/${year}`;
+      console.log(`Date filter: ${expiryDate} → ${dateWithHyphen} or ${dateWithSlash}`);
+      voucherQuery.expiryDate = { $in: [dateWithHyphen, dateWithSlash] };
+    }
+    
+    const vouchersWithReversed = await vouchersCollection.find(voucherQuery).toArray();
+    console.log(`Found ${vouchersWithReversed.length} vouchers with reversed months`);
+    
+    if (vouchersWithReversed.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+        totalCount: 0,
+        page,
+        limit
+      });
+    }
+    
+    // Get unique user IDs
+    const userIds = [...new Set(vouchersWithReversed.map(v => v.userId))];
+    console.log(`Unique users with reversed months: ${userIds.length}`);
+    
+    // Fetch user details with pagination
+    const totalCount = userIds.length;
+    const paginatedUserIds = userIds.slice((page - 1) * limit, page * limit);
+    
+    const users = await usersCollection.find({
+      _id: { $in: paginatedUserIds.map(id => new ObjectId(id)) },
+      $or: [
+        { serviceStatus: { $ne: 'inactive' } },
+        { serviceStatus: { $exists: false } }
+      ]
+    }).toArray();
+    
+    // Add filterType and calculate reversed amount for each user
+    const usersWithReversedData = users.map(user => {
+      const userVouchers = vouchersWithReversed.filter(v => v.userId === user._id.toString());
+      let reversedAmount = 0;
+      
+      userVouchers.forEach(voucher => {
+        if (voucher.months && Array.isArray(voucher.months)) {
+          voucher.months.forEach(month => {
+            if (month.status === 'reversed') {
+              reversedAmount += Number(month.remainingAmount || 0);
+            }
+          });
+        }
+      });
+      
+      return {
+        ...user,
+        filterType: 'reversed',
+        amount: reversedAmount,
+        remainingAmount: reversedAmount
+      };
+    });
+    
+    console.log(`Returning ${usersWithReversedData.length} reversed users for page ${page}`);
+    
+    res.status(200).json({
+      success: true,
+      data: usersWithReversedData,
+      totalCount,
+      page,
+      limit
+    });
+  } catch (error) {
+    console.error('Error fetching reversed users:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching reversed users',
+      error: error.message
+    });
+  }
+});
+
 // GET balance users (partial payment users with date filter and pagination)
 app.get('/api/balances', async (req, res) => {
   try {
