@@ -409,11 +409,7 @@ app.post('/api/users', async (req, res) => {
     });
     
     // Check if expiry date is tomorrow (to show in Expiring Soon immediately)
-    const nowUTC = new Date();
-    const nowInPKT = new Date(nowUTC.getTime() + PKT_OFFSET_MIN * 60000);
-    const todayY = nowInPKT.getUTCFullYear();
-    const todayM = nowInPKT.getUTCMonth();
-    const todayD = nowInPKT.getUTCDate();
+    // Reuse existing todayY, todayM, todayD from above
     const tomorrowDate = new Date(Date.UTC(todayY, todayM, todayD + 1));
     const tomorrowY = tomorrowDate.getUTCFullYear();
     const tomorrowM = tomorrowDate.getUTCMonth();
