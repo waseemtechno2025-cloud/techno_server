@@ -496,7 +496,7 @@ app.get('/api/users', async (req, res) => {
       };
     }
     
-    const users = await usersCollection.find(query).sort({ createdAt: 1 }).toArray();
+    const users = await usersCollection.find(query).sort({ userName: 1 }).toArray();
     res.status(200).json({
       success: true,
       count: users.length,
@@ -1360,7 +1360,7 @@ app.get('/api/users/paid', async (req, res) => {
     const totalCount = await usersCollection.countDocuments(query);
     const users = await usersCollection
       .find(query)
-      .sort({ createdAt: -1 })
+      .sort({ userName: 1 })
       .skip((page - 1) * limit)
       .limit(limit)
       .toArray();
@@ -1437,7 +1437,7 @@ app.get('/api/users/unpaid', async (req, res) => {
     const totalCount = await usersCollection.countDocuments(query);
     const users = await usersCollection
       .find(query)
-      .sort({ createdAt: -1 })
+      .sort({ userName: 1 })
       .skip((page - 1) * limit)
       .limit(limit)
       .toArray();
@@ -1719,11 +1719,10 @@ app.get('/api/users/expiring-soon', async (req, res) => {
       .map(u => ({ u, ymd: parseExpiryYMD(u.expiryDate) }))
       .filter(({ ymd }) => ymd && ymd.y === targetY && ymd.m === targetM && ymd.d === targetD)
       .sort((a, b) => {
-        // Sort by calendar day
-        if (!a.ymd || !b.ymd) return 0;
-        if (a.ymd.y !== b.ymd.y) return a.ymd.y - b.ymd.y;
-        if (a.ymd.m !== b.ymd.m) return a.ymd.m - b.ymd.m;
-        return a.ymd.d - b.ymd.d;
+        // Sort by userName A-Z
+        const nameA = (a.u.userName || '').toLowerCase();
+        const nameB = (b.u.userName || '').toLowerCase();
+        return nameA.localeCompare(nameB);
       });
 
     // Calculate days left using PKT midnights
