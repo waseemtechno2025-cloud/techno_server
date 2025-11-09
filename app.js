@@ -1729,9 +1729,26 @@ app.get('/api/users/expiring-soon', async (req, res) => {
     const mapped = usersAll.map(u => ({ u, ymd: parseExpiryYMD(u.expiryDate) }));
     
     // Filter by date only if date parameter was provided
-    const filtered = filterByDate
-      ? mapped.filter(({ ymd }) => ymd && ymd.y === targetY && ymd.m === targetM && ymd.d === targetD)
-      : mapped.filter(({ ymd }) => ymd !== null); // Show all users with valid expiry dates
+    let filtered;
+    if (filterByDate) {
+      // Specific date requested - filter by that date
+      filtered = mapped.filter(({ ymd }) => ymd && ymd.y === targetY && ymd.m === targetM && ymd.d === targetD);
+    } else {
+      // No date parameter - show users expiring within next 2 days (today and tomorrow)
+      // This prevents showing users with incorrectly set flags
+      const tomorrowInPKT = new Date(Date.UTC(todayY, todayM, todayD) + 24 * 60 * 60 * 1000);
+      const tomorrowY = tomorrowInPKT.getUTCFullYear();
+      const tomorrowM = tomorrowInPKT.getUTCMonth();
+      const tomorrowD = tomorrowInPKT.getUTCDate();
+      
+      filtered = mapped.filter(({ ymd }) => {
+        if (!ymd) return false;
+        // Show only if expiring today or tomorrow
+        const isToday = (ymd.y === todayY && ymd.m === todayM && ymd.d === todayD);
+        const isTomorrow = (ymd.y === tomorrowY && ymd.m === tomorrowM && ymd.d === tomorrowD);
+        return isToday || isTomorrow;
+      });
+    }
     
     const sorted = filtered.sort((a, b) => {
       // Sort by userName A-Z
@@ -3957,6 +3974,97 @@ app.get('/api/admin/check-user-expiry/:userId', ensureDbConnection, async (req, 
   } catch (error) {
     console.error('Debug error:', error);
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ============ CLEANUP ENDPOINT ============
+// Clean up stale showInExpiringSoon flags for users not expiring within 2 days
+app.post('/api/admin/cleanup-expiring-flags', ensureDbConnection, async (req, res) => {
+  try {
+    console.log('🧹 Cleaning up stale expiring-soon flags...');
+    
+    // Get current PKT date
+    const nowUTC = new Date();
+    const nowInPKT = new Date(nowUTC.getTime() + PKT_OFFSET_MIN * 60000);
+    const todayY = nowInPKT.getUTCFullYear();
+    const todayM = nowInPKT.getUTCMonth();
+    const todayD = nowInPKT.getUTCDate();
+    
+    const tomorrowInPKT = new Date(Date.UTC(todayY, todayM, todayD) + 24 * 60 * 60 * 1000);
+    const tomorrowY = tomorrowInPKT.getUTCFullYear();
+    const tomorrowM = tomorrowInPKT.getUTCMonth();
+    const tomorrowD = tomorrowInPKT.getUTCDate();
+    
+    // Find all users with showInExpiringSoon flag
+    const flaggedUsers = await usersCollection.find({
+      showInExpiringSoon: true
+    }).toArray();
+    
+    console.log(`📋 Found ${flaggedUsers.length} users with expiring-soon flag`);
+    
+    const parseExpiryYMD = (exp) => {
+      if (!exp) return null;
+      if (typeof exp === 'string') {
+        const parts = exp.split(/[-\/]/);
+        if (parts.length === 3) {
+          const d = parseInt(parts[0], 10);
+          const m = parseInt(parts[1], 10) - 1;
+          const y = parseInt(parts[2], 10);
+          if (!isNaN(d) && !isNaN(m) && !isNaN(y)) {
+            return { y, m, d };
+          }
+        }
+      }
+      return null;
+    };
+    
+    let cleanedCount = 0;
+    
+    for (const user of flaggedUsers) {
+      const ymd = parseExpiryYMD(user.expiryDate);
+      if (!ymd) {
+        // Invalid expiry date - clear flag
+        await usersCollection.updateOne(
+          { _id: user._id },
+          { $set: { showInExpiringSoon: false } }
+        );
+        cleanedCount++;
+        console.log(`   ❌ Cleared flag for ${user.userName} (invalid expiry date)`);
+        continue;
+      }
+      
+      const isToday = (ymd.y === todayY && ymd.m === todayM && ymd.d === todayD);
+      const isTomorrow = (ymd.y === tomorrowY && ymd.m === tomorrowM && ymd.d === tomorrowD);
+      
+      if (!isToday && !isTomorrow) {
+        // Not expiring within 2 days - clear flag
+        await usersCollection.updateOne(
+          { _id: user._id },
+          { $set: { showInExpiringSoon: false } }
+        );
+        cleanedCount++;
+        console.log(`   ❌ Cleared flag for ${user.userName} (expires ${user.expiryDate}, not within 2 days)`);
+      } else {
+        console.log(`   ✅ Kept flag for ${user.userName} (expires ${user.expiryDate})`);
+      }
+    }
+    
+    console.log(`✅ Cleanup complete: ${cleanedCount} stale flags cleared`);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Cleanup completed',
+      totalFlagged: flaggedUsers.length,
+      cleaned: cleanedCount,
+      remaining: flaggedUsers.length - cleanedCount
+    });
+  } catch (error) {
+    console.error('❌ Cleanup failed:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Cleanup failed',
+      error: error.message
+    });
   }
 });
 
