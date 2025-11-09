@@ -1393,45 +1393,52 @@ app.get('/api/users/unpaid', async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const expiryDate = req.query.expiryDate; // YYYY-MM-DD format
     
-    let userIds = [];
+    // Base query - Only show unpaid status (exclude pending) and active users
+    let query = {
+      status: 'unpaid',
+      $and: [
+        {
+          $or: [
+            { serviceStatus: { $ne: 'inactive' } },
+            { serviceStatus: { $exists: false } }
+          ]
+        }
+      ]
+    };
     
-    // If expiry date filter is provided, find users from vouchers collection
+    // If expiry date filter is provided, check both vouchers and users collections
     if (expiryDate) {
       const [year, month, day] = expiryDate.split('-');
       const dateWithHyphen = `${day}-${month}-${year}`;
       const dateWithSlash = `${day}/${month}/${year}`;
-      console.log(`Date filter: ${expiryDate} → ${dateWithHyphen} or ${dateWithSlash}`);
+      const isoFormat = expiryDate; // YYYY-MM-DD
+      console.log(`📅 Date filter: ${expiryDate} → formats: ${dateWithHyphen}, ${dateWithSlash}, ${isoFormat}`);
       
       // Find vouchers with matching expiry date
       const vouchers = await vouchersCollection.find({
-        expiryDate: { $in: [dateWithHyphen, dateWithSlash] }
+        expiryDate: { $in: [dateWithHyphen, dateWithSlash, isoFormat] }
       }).toArray();
       
-      userIds = vouchers.map(v => v.userId);
-      console.log(`Found ${userIds.length} vouchers with expiry date ${expiryDate}`);
-    }
-    
-    // Base query - Only show unpaid status (exclude pending)
-    let query = {
-      status: 'unpaid',
-      $or: [
-        { serviceStatus: { $ne: 'inactive' } },
-        { serviceStatus: { $exists: false } }
-      ]
-    };
-    
-    // Add user ID filter if expiry date was provided
-    if (expiryDate && userIds.length > 0) {
-      query._id = { $in: userIds.map(id => new ObjectId(id)) };
-    } else if (expiryDate && userIds.length === 0) {
-      // No users found for this expiry date
-      return res.status(200).json({
-        success: true,
-        data: [],
-        totalCount: 0,
-        page,
-        limit
-      });
+      const userIdsFromVouchers = vouchers.map(v => v.userId);
+      console.log(`📋 Found ${userIdsFromVouchers.length} vouchers with expiry date ${expiryDate}`);
+      
+      // Also check users collection for expiryDate field directly
+      // This handles users who have expiryDate stored directly in their document
+      if (userIdsFromVouchers.length > 0) {
+        query.$and.push({
+          $or: [
+            { _id: { $in: userIdsFromVouchers.map(id => new ObjectId(id)) } },
+            { expiryDate: { $in: [dateWithHyphen, dateWithSlash, isoFormat] } }
+          ]
+        });
+      } else {
+        // No vouchers found, but check users collection directly
+        query.$and.push({
+          expiryDate: { $in: [dateWithHyphen, dateWithSlash, isoFormat] }
+        });
+      }
+      
+      console.log(`🔍 Unpaid Query with date filter:`, JSON.stringify(query, null, 2));
     }
     
     const totalCount = await usersCollection.countDocuments(query);
@@ -1563,52 +1570,58 @@ app.get('/api/balances', async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const expiryDate = req.query.expiryDate; // YYYY-MM-DD format
     
-    let userIds = [];
-    
-    // If expiry date filter is provided, find users from vouchers collection
-    if (expiryDate) {
-      const [year, month, day] = expiryDate.split('-');
-      const dateWithHyphen = `${day}-${month}-${year}`;
-      const dateWithSlash = `${day}/${month}/${year}`;
-      console.log(`Date filter: ${expiryDate} → ${dateWithHyphen} or ${dateWithSlash}`);
-      
-      // Find vouchers with matching expiry date
-      const vouchers = await vouchersCollection.find({
-        expiryDate: { $in: [dateWithHyphen, dateWithSlash] }
-      }).toArray();
-      
-      userIds = vouchers.map(v => v.userId);
-      console.log(`Found ${userIds.length} vouchers with expiry date ${expiryDate}`);
-    }
-    
     // Base query
     let query = {
       status: 'partial',
       remainingAmount: { $gt: 0 },
-      $or: [
-        { serviceStatus: { $ne: 'inactive' } },
-        { serviceStatus: { $exists: false } }
+      $and: [
+        {
+          $or: [
+            { serviceStatus: { $ne: 'inactive' } },
+            { serviceStatus: { $exists: false } }
+          ]
+        }
       ]
     };
     
-    // Add user ID filter if expiry date was provided
-    if (expiryDate && userIds.length > 0) {
-      query._id = { $in: userIds.map(id => new ObjectId(id)) };
-    } else if (expiryDate && userIds.length === 0) {
-      // No users found for this expiry date
-      return res.status(200).json({
-        success: true,
-        data: [],
-        totalCount: 0,
-        page,
-        limit
-      });
+    // If expiry date filter is provided, check both vouchers and users collections
+    if (expiryDate) {
+      const [year, month, day] = expiryDate.split('-');
+      const dateWithHyphen = `${day}-${month}-${year}`;
+      const dateWithSlash = `${day}/${month}/${year}`;
+      const isoFormat = expiryDate; // YYYY-MM-DD
+      console.log(`📅 Balance users date filter: ${expiryDate} → formats: ${dateWithHyphen}, ${dateWithSlash}, ${isoFormat}`);
+      
+      // Find vouchers with matching expiry date
+      const vouchers = await vouchersCollection.find({
+        expiryDate: { $in: [dateWithHyphen, dateWithSlash, isoFormat] }
+      }).toArray();
+      
+      const userIdsFromVouchers = vouchers.map(v => v.userId);
+      console.log(`📋 Found ${userIdsFromVouchers.length} vouchers with expiry date ${expiryDate}`);
+      
+      // Also check users collection for expiryDate field directly
+      if (userIdsFromVouchers.length > 0) {
+        query.$and.push({
+          $or: [
+            { _id: { $in: userIdsFromVouchers.map(id => new ObjectId(id)) } },
+            { expiryDate: { $in: [dateWithHyphen, dateWithSlash, isoFormat] } }
+          ]
+        });
+      } else {
+        // No vouchers found, but check users collection directly
+        query.$and.push({
+          expiryDate: { $in: [dateWithHyphen, dateWithSlash, isoFormat] }
+        });
+      }
+      
+      console.log(`🔍 Balance Query with date filter:`, JSON.stringify(query, null, 2));
     }
     
     const totalCount = await usersCollection.countDocuments(query);
     const users = await usersCollection
       .find(query)
-      .sort({ createdAt: -1 })
+      .sort({ userName: 1 })
       .skip((page - 1) * limit)
       .limit(limit)
       .toArray();
