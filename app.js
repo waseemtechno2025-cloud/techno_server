@@ -1657,34 +1657,6 @@ app.get('/api/users/expiring-soon', async (req, res) => {
     const todayM = nowInPKT.getUTCMonth();
     const todayD = nowInPKT.getUTCDate();
     
-    // Determine target calendar day (PKT) from query or default to tomorrow
-    const dateParam = req.query.date; // YYYY-MM-DD
-    let targetY, targetM, targetD;
-    if (dateParam && /^\d{4}-\d{2}-\d{2}$/.test(String(dateParam))) {
-      const [yyyy, mm, dd] = String(dateParam).split('-');
-      targetY = parseInt(yyyy, 10);
-      targetM = parseInt(mm, 10) - 1; // JS months 0-based
-      targetD = parseInt(dd, 10);
-    } else {
-      const tomorrowInPKT = new Date(Date.UTC(todayY, todayM, todayD) + 24 * 60 * 60 * 1000);
-      targetY = tomorrowInPKT.getUTCFullYear();
-      targetM = tomorrowInPKT.getUTCMonth();
-      targetD = tomorrowInPKT.getUTCDate();
-    }
-
-    // Guard: if target day is on/before today's PKT day, return no results (only show upcoming)
-    const isBeforeToday =
-      (targetY < todayY) ||
-      (targetY === todayY && (targetM < todayM || (targetM === todayM && targetD < todayD)));
-    const isToday = (targetY === todayY && targetM === todayM && targetD === todayD);
-    if (isBeforeToday || isToday) {
-      return res.status(200).json({
-        success: true,
-        count: 0,
-        data: []
-      });
-    }
-
     // Fetch users marked by cron job as "expiring soon"
     // NOTE: showInExpiringSoon flag is set by cron job at 12 PM day before expiry
     const usersAll = await usersCollection.find({
@@ -1695,6 +1667,32 @@ app.get('/api/users/expiring-soon', async (req, res) => {
         { serviceStatus: { $exists: false } }
       ]
     }).toArray();
+
+    // If specific date is requested, filter by that date
+    const dateParam = req.query.date; // YYYY-MM-DD
+    let targetY, targetM, targetD;
+    let filterByDate = false;
+    
+    if (dateParam && /^\d{4}-\d{2}-\d{2}$/.test(String(dateParam))) {
+      filterByDate = true;
+      const [yyyy, mm, dd] = String(dateParam).split('-');
+      targetY = parseInt(yyyy, 10);
+      targetM = parseInt(mm, 10) - 1; // JS months 0-based
+      targetD = parseInt(dd, 10);
+      
+      // Guard: if target day is BEFORE today's PKT day, return no results (don't show past dates)
+      const isBeforeToday =
+        (targetY < todayY) ||
+        (targetY === todayY && (targetM < todayM || (targetM === todayM && targetD < todayD)));
+      
+      if (isBeforeToday) {
+        return res.status(200).json({
+          success: true,
+          count: 0,
+          data: []
+        });
+      }
+    }
 
     // Helper: parse expiryDate to PKT Y/M/D (supports DD-MM-YYYY and DD/MM/YYYY, and ISO fallback)
     const toPKT_YMD = (dateObj) => {
@@ -1728,20 +1726,24 @@ app.get('/api/users/expiring-soon', async (req, res) => {
       return null;
     };
 
-    const filtered = usersAll
-      .map(u => ({ u, ymd: parseExpiryYMD(u.expiryDate) }))
-      .filter(({ ymd }) => ymd && ymd.y === targetY && ymd.m === targetM && ymd.d === targetD)
-      .sort((a, b) => {
-        // Sort by userName A-Z
-        const nameA = (a.u.userName || '').toLowerCase();
-        const nameB = (b.u.userName || '').toLowerCase();
-        return nameA.localeCompare(nameB);
-      });
+    const mapped = usersAll.map(u => ({ u, ymd: parseExpiryYMD(u.expiryDate) }));
+    
+    // Filter by date only if date parameter was provided
+    const filtered = filterByDate
+      ? mapped.filter(({ ymd }) => ymd && ymd.y === targetY && ymd.m === targetM && ymd.d === targetD)
+      : mapped.filter(({ ymd }) => ymd !== null); // Show all users with valid expiry dates
+    
+    const sorted = filtered.sort((a, b) => {
+      // Sort by userName A-Z
+      const nameA = (a.u.userName || '').toLowerCase();
+      const nameB = (b.u.userName || '').toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
 
     // Calculate days left using PKT midnights
     const MS_PER_DAY = 24 * 60 * 60 * 1000;
     const todayPKTMidUTC = Date.UTC(todayY, todayM, todayD) - PKT_OFFSET_MIN * 60000;
-    const usersWithDaysLeft = filtered.map(({ u, ymd }) => {
+    const usersWithDaysLeft = sorted.map(({ u, ymd }) => {
       const expPKTMidUTC = Date.UTC(ymd.y, ymd.m, ymd.d) - PKT_OFFSET_MIN * 60000;
       const daysLeft = Math.round((expPKTMidUTC - todayPKTMidUTC) / MS_PER_DAY);
       const expAsDate = new Date(Date.UTC(ymd.y, ymd.m, ymd.d));
@@ -2430,21 +2432,23 @@ const checkExpiringUsers = async () => {
   }
 };
 
-// Function to remove users from Expiring Soon on their actual expiry day
-// UPDATED RECURRING CYCLE FLOW:
+// Function to move users to unpaid on their actual expiry day and create next month voucher
+// ACTUAL RECURRING CYCLE FLOW:
 // 1. User added: 28/10/2025 (recharge) → 28/11/2025 (expiry) → Status: PAID
-// 2. On 27/11/2025 (1 day before): checkTomorrowExpiringUsers() runs at 12 PM
-//    - User moves to UNPAID status immediately
-//    - Creates December voucher (unpaid)
-//    - Updates expiry to 28/12/2025
-//    - Sets showInExpiringSoon = true
-//    - User shows in both "Unpaid" and "Expiring Soon"
-// 3. On 28/11/2025 (actual expiry day): This function runs at 12 PM
-//    - Just removes showInExpiringSoon flag
-//    - User only shows in "Unpaid" (not in Expiring Soon anymore)
+// 2. On 27/11/2025 (1 day before expiry): checkTomorrowExpiringUsers() runs at 12 PM
+//    - Sets showInExpiringSoon = true (ONLY THIS, no status change)
+//    - User appears in "Expiring Soon" tab
+//    - Status remains PAID
+// 3. On 28/11/2025 (actual expiry day): moveTodayExpiredToUnpaid() runs at 12 PM
+//    - Changes status: PAID → UNPAID
+//    - Creates December voucher (unpaid month)
+//    - Updates expiry: 28/12/2025
+//    - Removes showInExpiringSoon flag
+//    - User shows in "Unpaid" tab only
 // 4. User pays December: Status → PAID, shows in paid-users
-// 5. On 27/12/2025: Shows in "Expiring Soon" again + moves to unpaid
-// 6. Cycle repeats
+// 5. On 27/12/2025 (1 day before): Shows in "Expiring Soon" again
+// 6. On 28/12/2025: Moves to unpaid again, creates January voucher
+// 7. Cycle repeats monthly
 const moveTodayExpiredToUnpaid = async () => {
   try {
     console.log('🕐 Running scheduled task: Moving TODAY/PAST expiring users to unpaid...');
