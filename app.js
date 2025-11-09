@@ -370,50 +370,22 @@ app.post('/api/users', async (req, res) => {
       (expiryYMD.y === todayY && expiryYMD.m === todayM && expiryYMD.d > todayD)
     );
     
-    // Check if expiry date is TODAY or PAST
-    const isExpiredOrToday = expiryYMD && (
-      expiryYMD.y < todayY ||
-      (expiryYMD.y === todayY && expiryYMD.m < todayM) ||
-      (expiryYMD.y === todayY && expiryYMD.m === todayM && expiryYMD.d <= todayD)
-    );
-    
     console.log('📅 Expiry Date Check:', {
       expiryDate,
       expiryYMD,
       todayYMD: { y: todayY, m: todayM, d: todayD },
-      isFutureExpiry,
-      isExpiredOrToday
+      isFutureExpiry
     });
     
     // Determine payment status
     let paymentStatus = 'unpaid'; // Default
     let paidAmount = 0;
     let remainingAmount = totalAmountForAllMonths;
-    let actualExpiryDate = expiryDate; // May be updated if already expired
     
     // Payment status logic:
     // - Pay Now: paid/partial (shows in Paid + Expiring Soon)
     // - Pay Later: always unpaid (shows in Unpaid Users)
     // - Checkbox: pending (shows in Expiring Soon only)
-    // - Expired/Today with Pay Now: Update expiry to next month but keep paid/partial status
-    
-    // FIRST: Check if expiry date needs to be updated (expired/today)
-    if (isExpiredOrToday && paymentType === 'now') {
-      // Update expiry to next month but DON'T change payment status
-      const currentExpiryDate = new Date(expiryYMD.y, expiryYMD.m, expiryYMD.d);
-      const nextExpiryDate = new Date(currentExpiryDate);
-      nextExpiryDate.setMonth(nextExpiryDate.getMonth() + 1);
-      
-      const dd = String(nextExpiryDate.getDate()).padStart(2, '0');
-      const mm = String(nextExpiryDate.getMonth() + 1).padStart(2, '0');
-      const yyyy = nextExpiryDate.getFullYear();
-      actualExpiryDate = `${dd}-${mm}-${yyyy}`;
-      
-      console.log('⚠️ EXPIRED/TODAY detected - updating expiry to next month');
-      console.log(`   → Original expiry: ${expiryDate} → New expiry: ${actualExpiryDate}`);
-    }
-    
-    // THEN: Determine payment status (expiry update doesn't affect this)
     if (status === 'pending') {
       // Explicit pending (checkbox)
       paymentStatus = 'pending';
@@ -466,7 +438,7 @@ app.post('/api/users', async (req, res) => {
       switchSplitter: switchSplitter ? switchSplitter.trim() : '',
       assignTo: assignTo ? assignTo.trim() : '',
       rechargeDate: rechargeDate || null,
-      expiryDate: actualExpiryDate || null, // Use actualExpiryDate (may be next month if expired)
+      expiryDate: expiryDate || null,
       status: paymentStatus, // Payment status: paid, unpaid, partial, pending
       serviceStatus: 'active', // Service status: always active for new users
       paidAmount: paidAmount,
