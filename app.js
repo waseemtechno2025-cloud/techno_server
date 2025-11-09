@@ -407,6 +407,21 @@ app.post('/api/users', async (req, res) => {
       paidAmount,
       remainingAmount
     });
+    
+    // Check if expiry date is TOMORROW - if yes, set showInExpiringSoon flag immediately
+    const tomorrowDate = new Date(Date.UTC(todayY, todayM, todayD + 1));
+    const tomorrowY = tomorrowDate.getUTCFullYear();
+    const tomorrowM = tomorrowDate.getUTCMonth();
+    const tomorrowD = tomorrowDate.getUTCDate();
+    
+    const isExpiringTomorrow = expiryYMD && 
+      expiryYMD.y === tomorrowY && 
+      expiryYMD.m === tomorrowM && 
+      expiryYMD.d === tomorrowD;
+    
+    if (isExpiringTomorrow) {
+      console.log('🔔 User expires TOMORROW - Setting showInExpiringSoon flag immediately');
+    }
 
     const newUser = {
       userName: userName.trim(),
@@ -428,7 +443,7 @@ app.post('/api/users', async (req, res) => {
       serviceStatus: 'active', // Service status: always active for new users
       paidAmount: paidAmount,
       remainingAmount: remainingAmount,
-      showInExpiringSoon: false, // Will be set to true by cron job at 12 PM
+      showInExpiringSoon: isExpiringTomorrow, // Set immediately if expires tomorrow
       createdAt: new Date()
     };
 
@@ -558,6 +573,49 @@ app.put('/api/users/:id', async (req, res) => {
         success: false,
         message: 'No fields to update'
       });
+    }
+    
+    // Check if expiry date is being updated and if it's TOMORROW
+    if (expiryDate !== undefined) {
+      const nowUTC = new Date();
+      const nowInPKT = new Date(nowUTC.getTime() + PKT_OFFSET_MIN * 60000);
+      const todayY = nowInPKT.getUTCFullYear();
+      const todayM = nowInPKT.getUTCMonth();
+      const todayD = nowInPKT.getUTCDate();
+      
+      const tomorrowDate = new Date(Date.UTC(todayY, todayM, todayD + 1));
+      const tomorrowY = tomorrowDate.getUTCFullYear();
+      const tomorrowM = tomorrowDate.getUTCMonth();
+      const tomorrowD = tomorrowDate.getUTCDate();
+      
+      // Parse expiry date
+      const parseExpiryDate = (expStr) => {
+        if (!expStr) return null;
+        const parts = String(expStr).split('-');
+        if (parts.length === 3) {
+          const d = parseInt(parts[0], 10);
+          const m = parseInt(parts[1], 10) - 1;
+          const y = parseInt(parts[2], 10);
+          if (!isNaN(d) && !isNaN(m) && !isNaN(y)) {
+            return { y, m, d };
+          }
+        }
+        return null;
+      };
+      
+      const expiryYMD = parseExpiryDate(expiryDate);
+      const isExpiringTomorrow = expiryYMD && 
+        expiryYMD.y === tomorrowY && 
+        expiryYMD.m === tomorrowM && 
+        expiryYMD.d === tomorrowD;
+      
+      if (isExpiringTomorrow) {
+        console.log('🔔 User expires TOMORROW - Setting showInExpiringSoon flag');
+        updateFields.showInExpiringSoon = true;
+      } else {
+        // If expiry date is not tomorrow, remove flag
+        updateFields.showInExpiringSoon = false;
+      }
     }
 
     const result = await usersCollection.updateOne(
