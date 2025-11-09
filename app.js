@@ -370,28 +370,60 @@ app.post('/api/users', async (req, res) => {
       (expiryYMD.y === todayY && expiryYMD.m === todayM && expiryYMD.d > todayD)
     );
     
+    // Check if expiry date is TODAY or PAST
+    const isExpiredOrToday = expiryYMD && (
+      expiryYMD.y < todayY ||
+      (expiryYMD.y === todayY && expiryYMD.m < todayM) ||
+      (expiryYMD.y === todayY && expiryYMD.m === todayM && expiryYMD.d <= todayD)
+    );
+    
     console.log('📅 Expiry Date Check:', {
       expiryDate,
       expiryYMD,
       todayYMD: { y: todayY, m: todayM, d: todayD },
-      isFutureExpiry
+      isFutureExpiry,
+      isExpiredOrToday
     });
     
     // Determine payment status
     let paymentStatus = 'unpaid'; // Default
     let paidAmount = 0;
     let remainingAmount = totalAmountForAllMonths;
+    let actualExpiryDate = expiryDate; // May be updated if already expired
     
     // Payment status logic:
     // - Pay Now: paid/partial (shows in Paid + Expiring Soon)
     // - Pay Later: always unpaid (shows in Unpaid Users)
     // - Checkbox: pending (shows in Expiring Soon only)
-    if (status === 'pending') {
+    // - Expired/Today: FORCE unpaid + calculate next month expiry
+    
+    if (isExpiredOrToday && paymentType === 'now') {
+      // SPECIAL CASE: User added with expiry date = TODAY or PAST
+      // Force to unpaid status and calculate next month expiry
+      paymentStatus = 'unpaid';
+      paidAmount = 0;
+      remainingAmount = monthlyFeeAfterDiscount; // Only 1 month (next month)
+      
+      // Calculate next month's expiry date
+      const currentExpiryDate = new Date(expiryYMD.y, expiryYMD.m, expiryYMD.d);
+      const nextExpiryDate = new Date(currentExpiryDate);
+      nextExpiryDate.setMonth(nextExpiryDate.getMonth() + 1);
+      
+      const dd = String(nextExpiryDate.getDate()).padStart(2, '0');
+      const mm = String(nextExpiryDate.getMonth() + 1).padStart(2, '0');
+      const yyyy = nextExpiryDate.getFullYear();
+      actualExpiryDate = `${dd}-${mm}-${yyyy}`;
+      
+      console.log('⚠️ EXPIRED/TODAY: User expires today or in past!');
+      console.log(`   → Original expiry: ${expiryDate}`);
+      console.log(`   → New expiry (next month): ${actualExpiryDate}`);
+      console.log(`   → Status: UNPAID (will create next month voucher)`);
+    } else if (status === 'pending') {
       // Explicit pending (checkbox)
       paymentStatus = 'pending';
       console.log('✅ Checkbox: pending status');
     } else if (paymentType === 'now') {
-      // Pay Now: Always paid/partial (even with future expiry)
+      // Pay Now: Always paid/partial (for future expiry)
       paymentStatus = numberOfMonths > 1 ? 'partial' : 'paid';
       paidAmount = monthlyFeeAfterDiscount;
       remainingAmount = totalAmountForAllMonths - monthlyFeeAfterDiscount;
@@ -438,7 +470,7 @@ app.post('/api/users', async (req, res) => {
       switchSplitter: switchSplitter ? switchSplitter.trim() : '',
       assignTo: assignTo ? assignTo.trim() : '',
       rechargeDate: rechargeDate || null,
-      expiryDate: expiryDate || null,
+      expiryDate: actualExpiryDate || null, // Use actualExpiryDate (may be next month if expired)
       status: paymentStatus, // Payment status: paid, unpaid, partial, pending
       serviceStatus: 'active', // Service status: always active for new users
       paidAmount: paidAmount,
@@ -449,6 +481,61 @@ app.post('/api/users', async (req, res) => {
 
     const result = await usersCollection.insertOne(newUser);
     const newUserId = result.insertedId;
+    
+    // SPECIAL CASE: If user was added with expired/today date, create next month voucher immediately
+    if (isExpiredOrToday && paymentType === 'now') {
+      console.log('🎫 Creating next month voucher immediately for expired user...');
+      
+      const vouchersCollection = db.collection('vouchers');
+      const nextMonthDate = new Date(expiryYMD.y, expiryYMD.m, expiryYMD.d);
+      nextMonthDate.setMonth(nextMonthDate.getMonth() + 1);
+      const monthName = nextMonthDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+      
+      const newMonth = {
+        month: monthName,
+        packageFee: packageFeePerMonth,
+        discount: discountPerMonth,
+        paidAmount: 0,
+        remainingAmount: monthlyFeeAfterDiscount,
+        paymentMethod: 'Pending',
+        receivedBy: '',
+        paymentType: 'later',
+        status: 'unpaid',
+        description: `${monthName} - Pending Payment`,
+        date: new Date(),
+        createdAt: new Date()
+      };
+      
+      // Create or update voucher
+      const existingVoucher = await vouchersCollection.findOne({ userId: newUserId.toString() });
+      
+      if (existingVoucher) {
+        await vouchersCollection.updateOne(
+          { userId: newUserId.toString() },
+          { 
+            $push: { months: newMonth },
+            $set: { 
+              expiryDate: actualExpiryDate,
+              updatedAt: new Date()
+            }
+          }
+        );
+        console.log(`✅ Added ${monthName} voucher to existing record`);
+      } else {
+        const newVoucher = {
+          userId: newUserId.toString(),
+          userName: userName.trim(),
+          packageName: packageName || '',
+          rechargeDate: rechargeDate || null,
+          expiryDate: actualExpiryDate,
+          months: [newMonth],
+          createdAt: new Date(),
+          updatedAt: new Date()
+        };
+        await vouchersCollection.insertOne(newVoucher);
+        console.log(`✅ Created new voucher with ${monthName}`);
+      }
+    }
     
     // Voucher creation functionality has been removed from this endpoint
     // Vouchers will be created separately through the dedicated voucher endpoint
