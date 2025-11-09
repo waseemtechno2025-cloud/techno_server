@@ -395,15 +395,11 @@ app.post('/api/users', async (req, res) => {
     // - Pay Now: paid/partial (shows in Paid + Expiring Soon)
     // - Pay Later: always unpaid (shows in Unpaid Users)
     // - Checkbox: pending (shows in Expiring Soon only)
-    // - Expired/Today: FORCE unpaid + calculate next month expiry
+    // - Expired/Today with Pay Now: Update expiry to next month but keep paid/partial status
     
+    // FIRST: Check if expiry date needs to be updated (expired/today)
     if (isExpiredOrToday && paymentType === 'now') {
-      // SPECIAL CASE: User added with expiry date = TODAY or PAST
-      // Force to unpaid status and calculate next month expiry
-      paymentStatus = 'unpaid';
-      paidAmount = 0;
-      
-      // Calculate next month's expiry date from the original expiry
+      // Update expiry to next month but DON'T change payment status
       const currentExpiryDate = new Date(expiryYMD.y, expiryYMD.m, expiryYMD.d);
       const nextExpiryDate = new Date(currentExpiryDate);
       nextExpiryDate.setMonth(nextExpiryDate.getMonth() + 1);
@@ -413,51 +409,17 @@ app.post('/api/users', async (req, res) => {
       const yyyy = nextExpiryDate.getFullYear();
       actualExpiryDate = `${dd}-${mm}-${yyyy}`;
       
-      // Recalculate remainingAmount based on new expiry date
-      // Parse recharge date
-      const parseRechargeDate = (dateStr) => {
-        if (!dateStr) return null;
-        const parts = String(dateStr).split('-');
-        if (parts.length === 3) {
-          const d = parseInt(parts[0], 10);
-          const m = parseInt(parts[1], 10) - 1;
-          const y = parseInt(parts[2], 10);
-          if (!isNaN(d) && !isNaN(m) && !isNaN(y)) {
-            return { y, m, d };
-          }
-        }
-        return null;
-      };
-      
-      const rechargeYMD = parseRechargeDate(rechargeDate);
-      const newExpiryYMD = { y: yyyy, m: nextExpiryDate.getMonth(), d: parseInt(dd, 10) };
-      
-      // Calculate months between recharge and new expiry
-      let monthsBetween = 0;
-      if (rechargeYMD && newExpiryYMD) {
-        monthsBetween = (newExpiryYMD.y - rechargeYMD.y) * 12 + (newExpiryYMD.m - rechargeYMD.m);
-        if (newExpiryYMD.d < rechargeYMD.d) {
-          monthsBetween -= 1;
-        }
-        monthsBetween = Math.max(1, monthsBetween);
-      } else {
-        monthsBetween = 1; // Default to 1 month
-      }
-      
-      remainingAmount = monthlyFeeAfterDiscount * monthsBetween;
-      
-      console.log('⚠️ EXPIRED/TODAY: User expires today or in past!');
-      console.log(`   → Original expiry: ${expiryDate}`);
-      console.log(`   → New expiry (next month): ${actualExpiryDate}`);
-      console.log(`   → Recharge: ${rechargeDate} → Expiry: ${actualExpiryDate}`);
-      console.log(`   → Months: ${monthsBetween}, Total: Rs ${remainingAmount}`);
-      console.log(`   → Status: UNPAID (VoucherModal will handle payment)`);
-    } else if (status === 'pending') {
+      console.log('⚠️ EXPIRED/TODAY detected - updating expiry to next month');
+      console.log(`   → Original expiry: ${expiryDate} → New expiry: ${actualExpiryDate}`);
+    }
+    
+    // THEN: Determine payment status (expiry update doesn't affect this)
+    if (status === 'pending') {
       // Explicit pending (checkbox)
       paymentStatus = 'pending';
       console.log('✅ Checkbox: pending status');
     } else if (paymentType === 'now') {
-      // Pay Now: Always paid/partial (for future expiry)
+      // Pay Now: Always paid/partial (regardless of expiry date)
       paymentStatus = numberOfMonths > 1 ? 'partial' : 'paid';
       paidAmount = monthlyFeeAfterDiscount;
       remainingAmount = totalAmountForAllMonths - monthlyFeeAfterDiscount;
