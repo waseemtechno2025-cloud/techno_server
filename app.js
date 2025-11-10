@@ -1952,32 +1952,53 @@ app.get('/api/transactions/income', async (req, res) => {
 // GET all expenses
 app.get('/api/transactions/expense', ensureDbConnection, async (req, res) => {
   try {
-    console.log('📊 Fetching expenses from DB...');
-    console.log('📊 expensesCollection exists:', !!expensesCollection);
-    
-    if (!expensesCollection) {
-      return res.status(500).json({
-        success: false,
-        message: 'Expenses collection not initialized'
-      });
-    }
-    
-    const expenses = await expensesCollection.find({})
-      .sort({ date: -1 })
-      .toArray();
-    
-    console.log('✅ Fetched expenses:', expenses.length);
-    
+    const result = await db.collection('expenses').find({}).sort({ date: -1 }).toArray();
+ 
     res.status(200).json({
       success: true,
-      count: expenses.length,
-      data: expenses
+      count: result.length,
+      data: result
     });
   } catch (error) {
     console.error('❌ Error fetching expenses:', error);
     res.status(500).json({
       success: false,
       message: 'Error fetching expenses',
+      error: error.message
+    });
+  }
+});
+
+// DEBUG endpoint to check collections
+app.get('/api/debug/collections', ensureDbConnection, async (req, res) => {
+  try {
+    const collections = await db.listCollections().toArray();
+    const collectionNames = collections.map(c => c.name);
+    
+    // Check expenses collection specifically
+    const expensesExists = collectionNames.includes('expenses');
+    let expenseCount = 0;
+    let sampleExpense = null;
+    
+    if (expensesExists) {
+      expenseCount = await db.collection('expenses').countDocuments();
+      sampleExpense = await db.collection('expenses').findOne({});
+    }
+    
+    res.status(200).json({
+      success: true,
+      database: db.databaseName,
+      allCollections: collectionNames,
+      expensesCollection: {
+        exists: expensesExists,
+        initialized: !!expensesCollection,
+        count: expenseCount,
+        sampleData: sampleExpense
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
       error: error.message
     });
   }
