@@ -1952,7 +1952,37 @@ app.get('/api/transactions/income', async (req, res) => {
 // GET all expenses
 app.get('/api/transactions/expense', ensureDbConnection, async (req, res) => {
   try {
+    console.log('🔍 Database Name:', db.databaseName);
+    console.log('🔍 Checking expenses collection...');
+    
+    // List all collections to verify expenses exists
+    const collections = await db.listCollections().toArray();
+    const collectionNames = collections.map(c => c.name);
+    console.log('📋 All collections:', collectionNames);
+    
+    const hasExpenses = collectionNames.includes('expenses');
+    console.log('✅ Expenses collection exists:', hasExpenses);
+    
+    if (!hasExpenses) {
+      return res.status(200).json({
+        success: false,
+        message: 'Expenses collection does not exist',
+        database: db.databaseName,
+        availableCollections: collectionNames
+      });
+    }
+    
+    // Count documents
+    const count = await db.collection('expenses').countDocuments();
+    console.log('📊 Total documents in expenses:', count);
+    
+    // Fetch with detailed logging
     const result = await db.collection('expenses').find({}).sort({ date: -1 }).toArray();
+    console.log('✅ Fetched expenses:', result.length);
+    
+    if (result.length > 0) {
+      console.log('📄 Sample expense:', JSON.stringify(result[0]));
+    }
  
     res.status(200).json({
       success: true,
