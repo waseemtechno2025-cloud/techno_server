@@ -1733,17 +1733,6 @@ app.get('/api/users/expiring-soon', async (req, res) => {
     const todayM = nowInPKT.getUTCMonth();
     const todayD = nowInPKT.getUTCDate();
     
-    // Fetch users marked by cron job as "expiring soon"
-    // NOTE: showInExpiringSoon flag is set by cron job at 12 PM day before expiry
-    const usersAll = await usersCollection.find({
-      showInExpiringSoon: true,
-      status: { $in: ['paid', 'partial', 'unpaid', 'pending'] },
-      $or: [
-        { serviceStatus: { $ne: 'inactive' } },
-        { serviceStatus: { $exists: false } }
-      ]
-    }).toArray();
-
     // If specific date is requested, filter by that date
     const dateParam = req.query.date; // YYYY-MM-DD
     let targetY, targetM, targetD;
@@ -1769,6 +1758,24 @@ app.get('/api/users/expiring-soon', async (req, res) => {
         });
       }
     }
+    
+    // Fetch users based on whether specific date is requested
+    // If date is provided: fetch ALL active users (we'll filter by date later)
+    // If no date: only fetch users marked by cron job with showInExpiringSoon flag
+    const query = {
+      status: { $in: ['paid', 'partial', 'unpaid', 'pending'] },
+      $or: [
+        { serviceStatus: { $ne: 'inactive' } },
+        { serviceStatus: { $exists: false } }
+      ]
+    };
+    
+    // Only filter by showInExpiringSoon flag when no specific date is requested
+    if (!filterByDate) {
+      query.showInExpiringSoon = true;
+    }
+    
+    const usersAll = await usersCollection.find(query).toArray();
 
     // Helper: parse expiryDate to PKT Y/M/D (supports DD-MM-YYYY and DD/MM/YYYY, and ISO fallback)
     const toPKT_YMD = (dateObj) => {
