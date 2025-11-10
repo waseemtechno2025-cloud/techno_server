@@ -25,6 +25,7 @@ let routersCollection;
 let fiberCablesCollection;
 let vouchersCollection;
 let transactionsCollection;
+let expensesCollection;
 let isConnected = false;
 let client;
 
@@ -66,6 +67,7 @@ async function connectToDatabase() {
     fiberCablesCollection = db.collection('fiberCables');
     vouchersCollection = db.collection('vouchers');
     transactionsCollection = db.collection('transactions');
+    expensesCollection = db.collection('expenses');
     
     console.log('Collections initialized:', {
       streets: !!streetsCollection,
@@ -77,7 +79,8 @@ async function connectToDatabase() {
       routers: !!routersCollection,
       fiberCables: !!fiberCablesCollection,
       vouchers: !!vouchersCollection,
-      transactions: !!transactionsCollection
+      transactions: !!transactionsCollection,
+      expenses: !!expensesCollection
     });
     
     // Create unique index on name field
@@ -1946,24 +1949,106 @@ app.get('/api/transactions/income', async (req, res) => {
   }
 });
 
-// GET expense transactions
+// GET all expenses
 app.get('/api/transactions/expense', async (req, res) => {
   try {
-    const transactionsCollection = db.collection('transactions');
-    const transactions = await transactionsCollection.find({
-      type: 'expense'
-    }).sort({ date: -1 }).toArray();
+    const expenses = await expensesCollection.find({})
+      .sort({ date: -1 })
+      .toArray();
     
     res.status(200).json({
       success: true,
-      count: transactions.length,
-      data: transactions
+      count: expenses.length,
+      data: expenses
     });
   } catch (error) {
     console.error('Error fetching expenses:', error);
     res.status(500).json({
       success: false,
       message: 'Error fetching expenses',
+      error: error.message
+    });
+  }
+});
+
+// POST add new expense
+app.post('/api/transactions/expense', async (req, res) => {
+  try {
+    const { amount, description, category, paidTo, date } = req.body;
+    
+    // Validate required fields
+    if (!amount || !description || !category) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount, description, and category are required'
+      });
+    }
+    
+    // Create expense object
+    const expense = {
+      amount: parseFloat(amount),
+      description,
+      category,
+      paidTo: paidTo || 'N/A',
+      date: date ? new Date(date) : new Date(),
+      createdAt: new Date()
+    };
+    
+    // Insert into expenses collection
+    const result = await expensesCollection.insertOne(expense);
+    
+    // Get the created expense
+    const createdExpense = await expensesCollection.findOne({ _id: result.insertedId });
+    
+    console.log('✅ Expense added:', createdExpense);
+    
+    res.status(201).json({
+      success: true,
+      message: 'Expense added successfully',
+      data: createdExpense
+    });
+  } catch (error) {
+    console.error('❌ Error adding expense:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error adding expense',
+      error: error.message
+    });
+  }
+});
+
+// DELETE expense by ID
+app.delete('/api/transactions/expense/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid expense ID'
+      });
+    }
+    
+    const result = await expensesCollection.deleteOne({ _id: new ObjectId(id) });
+    
+    if (result.deletedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Expense not found'
+      });
+    }
+    
+    console.log('✅ Expense deleted:', id);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Expense deleted successfully'
+    });
+  } catch (error) {
+    console.error('❌ Error deleting expense:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error deleting expense',
       error: error.message
     });
   }
