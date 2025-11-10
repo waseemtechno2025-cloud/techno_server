@@ -1308,29 +1308,39 @@ app.get('/api/users/paid', async (req, res) => {
     const vouchersCollection = db.collection('vouchers');
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
-    const rechargeDate = req.query.paymentDate; // YYYY-MM-DD format (frontend sends as paymentDate but we filter by rechargeDate)
+    const paymentDate = req.query.paymentDate; // YYYY-MM-DD format
     
     let userIds = [];
     
-    // If recharge date filter is provided, find users from vouchers collection
-    if (rechargeDate) {
-      const [year, month, day] = rechargeDate.split('-');
-      const dateWithHyphen = `${day}-${month}-${year}`;
-      const dateWithSlash = `${day}/${month}/${year}`;
-      console.log(`Recharge date filter: ${rechargeDate} → ${dateWithHyphen} or ${dateWithSlash}`);
+    // If payment date filter is provided, find users based on voucher creation date
+    if (paymentDate) {
+      const [yearStr, monthStr, dayStr] = paymentDate.split('-');
+      const year = parseInt(yearStr, 10);
+      const month = parseInt(monthStr, 10) - 1; // JS Date month is 0-indexed
+      const day = parseInt(dayStr, 10);
       
-      // Find vouchers with matching recharge date
-      const vouchers = await vouchersCollection.find({
-        rechargeDate: { $in: [dateWithHyphen, dateWithSlash] }
-      }).toArray();
-      
-      console.log(`📊 Query result: Found ${vouchers.length} vouchers`);
-      vouchers.forEach(v => {
-        console.log(`  - User: ${v.userName}, rechargeDate: ${v.rechargeDate}, expiryDate: ${v.expiryDate}`);
-      });
-      
-      userIds = vouchers.map(v => v.userId);
-      console.log(`Found ${userIds.length} vouchers with recharge date ${rechargeDate}`);
+      if (!Number.isNaN(year) && !Number.isNaN(month) && !Number.isNaN(day)) {
+        const startOfDay = new Date(year, month, day, 0, 0, 0, 0);
+        const endOfDay = new Date(year, month, day + 1, 0, 0, 0, 0);
+        console.log(`Payment date filter: ${paymentDate} → createdAt between ${startOfDay.toISOString()} and ${endOfDay.toISOString()}`);
+        
+        const vouchers = await vouchersCollection.find({
+          createdAt: {
+            $gte: startOfDay,
+            $lt: endOfDay
+          }
+        }).toArray();
+        
+        console.log(`📊 Query result: Found ${vouchers.length} vouchers by createdAt`);
+        vouchers.forEach(v => {
+          console.log(`  - User: ${v.userName}, createdAt: ${v.createdAt}`);
+        });
+        
+        userIds = vouchers.map(v => v.userId);
+        console.log(`Found ${userIds.length} vouchers with payment date ${paymentDate}`);
+      } else {
+        console.log(`⚠️ Invalid paymentDate received: ${paymentDate}`);
+      }
     }
     
     // Base query - include both fully paid and partially paid users
@@ -1343,11 +1353,11 @@ app.get('/api/users/paid', async (req, res) => {
     };
     
     // Add user ID filter if recharge date was provided
-    if (rechargeDate && userIds.length > 0) {
+    if (paymentDate && userIds.length > 0) {
       const objectIds = userIds.map(id => new ObjectId(id));
       query._id = { $in: objectIds };
       console.log(`🔍 Filtering users with IDs:`, objectIds.map(id => id.toString()));
-    } else if (rechargeDate && userIds.length === 0) {
+    } else if (paymentDate && userIds.length === 0) {
       // No users found for this recharge date
       return res.status(200).json({
         success: true,
