@@ -1953,12 +1953,18 @@ app.get('/api/transactions/income', async (req, res) => {
 app.get('/api/transactions/expense', ensureDbConnection, async (req, res) => {
   try {
     console.log('🔍 Database Name:', db.databaseName);
+    console.log('🔍 Expected Database:', DB_NAME);
+    console.log('🔍 MONGODB_URI exists:', !!MONGODB_URI);
     console.log('🔍 Checking expenses collection...');
     
+    // Ensure we're using the correct database
+    const correctDb = client.db(DB_NAME);
+    console.log('🔍 Correct DB Name:', correctDb.databaseName);
+    
     // List all collections to verify expenses exists
-    const collections = await db.listCollections().toArray();
+    const collections = await correctDb.listCollections().toArray();
     const collectionNames = collections.map(c => c.name);
-    console.log('📋 All collections:', collectionNames);
+    console.log('📋 All collections in', DB_NAME, ':', collectionNames);
     
     const hasExpenses = collectionNames.includes('expenses');
     console.log('✅ Expenses collection exists:', hasExpenses);
@@ -1967,17 +1973,18 @@ app.get('/api/transactions/expense', ensureDbConnection, async (req, res) => {
       return res.status(200).json({
         success: false,
         message: 'Expenses collection does not exist',
-        database: db.databaseName,
+        database: correctDb.databaseName,
+        expectedDatabase: DB_NAME,
         availableCollections: collectionNames
       });
     }
     
     // Count documents
-    const count = await db.collection('expenses').countDocuments();
+    const count = await correctDb.collection('expenses').countDocuments();
     console.log('📊 Total documents in expenses:', count);
     
     // Fetch with detailed logging
-    const result = await db.collection('expenses').find({}).sort({ date: -1 }).toArray();
+    const result = await correctDb.collection('expenses').find({}).sort({ date: -1 }).toArray();
     console.log('✅ Fetched expenses:', result.length);
     
     if (result.length > 0) {
@@ -1987,7 +1994,11 @@ app.get('/api/transactions/expense', ensureDbConnection, async (req, res) => {
     res.status(200).json({
       success: true,
       count: result.length,
-      data: result
+      data: result,
+      debug: {
+        database: correctDb.databaseName,
+        expectedDatabase: DB_NAME
+      }
     });
   } catch (error) {
     console.error('❌ Error fetching expenses:', error);
