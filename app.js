@@ -1325,29 +1325,51 @@ app.get('/api/users/paid', async (req, res) => {
 
         console.log(`Payment date filter: ${paymentDate} → window ${startOfDay.toISOString()} to ${endOfDay.toISOString()}`);
 
-        const normalizeDate = (value) => {
-          if (!value) return null;
-          if (value instanceof Date) return value;
-          const dateFromNative = new Date(value);
-          if (!Number.isNaN(dateFromNative.getTime())) {
-            return dateFromNative;
+        const formatToIso = (date) => date.toISOString().split('T')[0];
+        const formatToLocal = (date) => {
+          try {
+            return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(date);
+          } catch (err) {
+            // Fallback to ISO if Intl with timezone not available
+            return formatToIso(date);
           }
+        };
+
+        const normalizeToIsoString = (value) => {
+          if (!value) return null;
+          if (value instanceof Date) {
+            return [formatToIso(value), formatToLocal(value)];
+          }
+
           if (typeof value === 'string') {
+            // handles ISO strings, yyyy-mm-dd, dd-mm-yyyy, dd/mm/yyyy
+            const native = new Date(value);
+            if (!Number.isNaN(native.getTime())) {
+              return [formatToIso(native), formatToLocal(native)];
+            }
+
             const parts = value.split(/[-\/]/);
             if (parts.length === 3) {
-              const [d, m, y] = parts.map((part) => parseInt(part, 10));
-              if (!Number.isNaN(d) && !Number.isNaN(m) && !Number.isNaN(y)) {
-                return new Date(y, m - 1, d);
+              let [a, b, c] = parts;
+              if (a.length === 4) {
+                // already yyyy-mm-dd style
+                return [`${a}-${b.padStart(2, '0')}-${c.padStart(2, '0')}`];
               }
+              // assume dd-mm-yyyy
+              const dayPart = a.padStart(2, '0');
+              const monthPart = b.padStart(2, '0');
+              const yearPart = c;
+              return [`${yearPart}-${monthPart}-${dayPart}`];
             }
           }
+
           return null;
         };
 
-        const isWithinRange = (value) => {
-          const dateValue = normalizeDate(value);
-          if (!dateValue) return false;
-          return dateValue >= startOfDay && dateValue < endOfDay;
+        const matchesPaymentDate = (value) => {
+          const normalized = normalizeToIsoString(value);
+          if (!normalized) return false;
+          return normalized.some((iso) => iso === paymentDate);
         };
 
         const vouchers = await vouchersCollection.find({ 'months.status': { $in: ['paid', 'partial'] } }).toArray();
@@ -1357,11 +1379,11 @@ app.get('/api/users/paid', async (req, res) => {
           const paidOrPartialMonths = months.filter((month) => ['paid', 'partial'].includes(month.status));
 
           const monthMatches = paidOrPartialMonths.some((month) => {
-            if (isWithinRange(month.createdAt) || isWithinRange(month.date)) {
+            if (matchesPaymentDate(month.createdAt) || matchesPaymentDate(month.date)) {
               return true;
             }
             if (Array.isArray(month.paymentHistory)) {
-              return month.paymentHistory.some((entry) => isWithinRange(entry?.date));
+              return month.paymentHistory.some((entry) => matchesPaymentDate(entry?.date));
             }
             return false;
           });
@@ -1370,7 +1392,7 @@ app.get('/api/users/paid', async (req, res) => {
             return true;
           }
 
-          const topLevelMatch = (isWithinRange(voucher.createdAt) || isWithinRange(voucher.updatedAt));
+          const topLevelMatch = (matchesPaymentDate(voucher.createdAt) || matchesPaymentDate(voucher.updatedAt));
           return topLevelMatch && paidOrPartialMonths.length > 0;
         });
 
