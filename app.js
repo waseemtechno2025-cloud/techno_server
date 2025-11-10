@@ -1312,7 +1312,7 @@ app.get('/api/users/paid', async (req, res) => {
     
     let userIds = [];
     
-    // If payment date filter is provided, find users based on voucher creation date
+    // If payment date filter is provided, focus on vouchers that recorded paid/partial activity that day
     if (paymentDate) {
       const [yearStr, monthStr, dayStr] = paymentDate.split('-');
       const year = parseInt(yearStr, 10);
@@ -1325,29 +1325,62 @@ app.get('/api/users/paid', async (req, res) => {
 
         console.log(`Payment date filter: ${paymentDate} → window ${startOfDay.toISOString()} to ${endOfDay.toISOString()}`);
 
-        const dateVariants = [
-          paymentDate,
-          `${dayStr}-${monthStr}-${yearStr}`,
-          `${dayStr}/${monthStr}/${yearStr}`
-        ];
+        const normalizeDate = (value) => {
+          if (!value) return null;
+          if (value instanceof Date) return value;
+          const dateFromNative = new Date(value);
+          if (!Number.isNaN(dateFromNative.getTime())) {
+            return dateFromNative;
+          }
+          if (typeof value === 'string') {
+            const parts = value.split(/[-\/]/);
+            if (parts.length === 3) {
+              const [d, m, y] = parts.map((part) => parseInt(part, 10));
+              if (!Number.isNaN(d) && !Number.isNaN(m) && !Number.isNaN(y)) {
+                return new Date(y, m - 1, d);
+              }
+            }
+          }
+          return null;
+        };
 
-        const vouchers = await vouchersCollection.find({
-          $or: [
-            { createdAt: { $gte: startOfDay, $lt: endOfDay } },
-            { updatedAt: { $gte: startOfDay, $lt: endOfDay } },
-            { 'months.createdAt': { $gte: startOfDay, $lt: endOfDay } },
-            { 'months.date': { $gte: startOfDay, $lt: endOfDay } },
-            { 'months.paymentHistory.date': { $in: dateVariants } }
-          ]
-        }).toArray();
+        const isWithinRange = (value) => {
+          const dateValue = normalizeDate(value);
+          if (!dateValue) return false;
+          return dateValue >= startOfDay && dateValue < endOfDay;
+        };
 
-        console.log(`📊 Query result: Found ${vouchers.length} vouchers by createdAt`);
-        vouchers.forEach(v => {
-          console.log(`  - User: ${v.userName}, createdAt: ${v.createdAt}, updatedAt: ${v.updatedAt}`);
+        const vouchers = await vouchersCollection.find({ 'months.status': { $in: ['paid', 'partial'] } }).toArray();
+
+        const filteredVouchers = vouchers.filter((voucher) => {
+          const months = Array.isArray(voucher.months) ? voucher.months : [];
+          const paidOrPartialMonths = months.filter((month) => ['paid', 'partial'].includes(month.status));
+
+          const monthMatches = paidOrPartialMonths.some((month) => {
+            if (isWithinRange(month.createdAt) || isWithinRange(month.date)) {
+              return true;
+            }
+            if (Array.isArray(month.paymentHistory)) {
+              return month.paymentHistory.some((entry) => isWithinRange(entry?.date));
+            }
+            return false;
+          });
+
+          if (monthMatches) {
+            return true;
+          }
+
+          const topLevelMatch = (isWithinRange(voucher.createdAt) || isWithinRange(voucher.updatedAt));
+          return topLevelMatch && paidOrPartialMonths.length > 0;
         });
 
-        userIds = vouchers.map(v => v.userId);
-        console.log(`Found ${userIds.length} vouchers with payment date ${paymentDate}`);
+        console.log(`📊 Query result: Found ${filteredVouchers.length} vouchers matching ${paymentDate}`);
+        filteredVouchers.forEach(v => {
+          console.log(`  - User: ${v.userName}, voucherCreated: ${v.createdAt}, months: ${(v.months || []).length}`);
+        });
+
+        userIds = filteredVouchers.map(v => v.userId);
+        console.log(`Found ${userIds.length} user(s) with paid/partial activity on ${paymentDate}`);
       } else {
         console.log(`⚠️ Invalid paymentDate received: ${paymentDate}`);
       }
