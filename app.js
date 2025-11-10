@@ -1322,20 +1322,30 @@ app.get('/api/users/paid', async (req, res) => {
       if (!Number.isNaN(year) && !Number.isNaN(month) && !Number.isNaN(day)) {
         const startOfDay = new Date(year, month, day, 0, 0, 0, 0);
         const endOfDay = new Date(year, month, day + 1, 0, 0, 0, 0);
-        console.log(`Payment date filter: ${paymentDate} → createdAt between ${startOfDay.toISOString()} and ${endOfDay.toISOString()}`);
-        
+
+        console.log(`Payment date filter: ${paymentDate} → window ${startOfDay.toISOString()} to ${endOfDay.toISOString()}`);
+
+        const dateVariants = [
+          paymentDate,
+          `${dayStr}-${monthStr}-${yearStr}`,
+          `${dayStr}/${monthStr}/${yearStr}`
+        ];
+
         const vouchers = await vouchersCollection.find({
-          createdAt: {
-            $gte: startOfDay,
-            $lt: endOfDay
-          }
+          $or: [
+            { createdAt: { $gte: startOfDay, $lt: endOfDay } },
+            { updatedAt: { $gte: startOfDay, $lt: endOfDay } },
+            { 'months.createdAt': { $gte: startOfDay, $lt: endOfDay } },
+            { 'months.date': { $gte: startOfDay, $lt: endOfDay } },
+            { 'months.paymentHistory.date': { $in: dateVariants } }
+          ]
         }).toArray();
-        
+
         console.log(`📊 Query result: Found ${vouchers.length} vouchers by createdAt`);
         vouchers.forEach(v => {
-          console.log(`  - User: ${v.userName}, createdAt: ${v.createdAt}`);
+          console.log(`  - User: ${v.userName}, createdAt: ${v.createdAt}, updatedAt: ${v.updatedAt}`);
         });
-        
+
         userIds = vouchers.map(v => v.userId);
         console.log(`Found ${userIds.length} vouchers with payment date ${paymentDate}`);
       } else {
