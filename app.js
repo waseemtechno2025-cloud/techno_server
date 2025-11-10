@@ -107,17 +107,17 @@ async function connectToDatabase() {
 // Middleware to ensure database connection
 async function ensureDbConnection(req, res, next) {
   try {
-    console.log(`[${req.method}] ${req.path} - Connection status: ${isConnected}, DB: ${!!db}, Collections: ${!!usersCollection}`);
+    console.log(`[${req.method}] ${req.path} - Connection: ${isConnected}, DB: ${!!db}, Users: ${!!usersCollection}, Expenses: ${!!expensesCollection}`);
     
-    if (!isConnected || !db || !usersCollection) {
-      console.log('Database not connected, connecting now...');
+    if (!isConnected || !db || !usersCollection || !expensesCollection) {
+      console.log('Database not connected or collections missing, connecting now...');
       await connectToDatabase();
       console.log('Database connected successfully in middleware');
     }
     
-    // Double check collections are initialized
+    // Double check core collections are initialized
     if (!usersCollection) {
-      throw new Error('Collections failed to initialize');
+      throw new Error('Users collection failed to initialize');
     }
     
     next();
@@ -1950,11 +1950,23 @@ app.get('/api/transactions/income', async (req, res) => {
 });
 
 // GET all expenses
-app.get('/api/transactions/expense', async (req, res) => {
+app.get('/api/transactions/expense', ensureDbConnection, async (req, res) => {
   try {
+    console.log('📊 Fetching expenses from DB...');
+    console.log('📊 expensesCollection exists:', !!expensesCollection);
+    
+    if (!expensesCollection) {
+      return res.status(500).json({
+        success: false,
+        message: 'Expenses collection not initialized'
+      });
+    }
+    
     const expenses = await expensesCollection.find({})
       .sort({ date: -1 })
       .toArray();
+    
+    console.log('✅ Fetched expenses:', expenses.length);
     
     res.status(200).json({
       success: true,
@@ -1962,7 +1974,7 @@ app.get('/api/transactions/expense', async (req, res) => {
       data: expenses
     });
   } catch (error) {
-    console.error('Error fetching expenses:', error);
+    console.error('❌ Error fetching expenses:', error);
     res.status(500).json({
       success: false,
       message: 'Error fetching expenses',
@@ -1972,7 +1984,7 @@ app.get('/api/transactions/expense', async (req, res) => {
 });
 
 // POST add new expense
-app.post('/api/transactions/expense', async (req, res) => {
+app.post('/api/transactions/expense', ensureDbConnection, async (req, res) => {
   try {
     const { amount, description, category, paidTo, date } = req.body;
     
@@ -2018,7 +2030,7 @@ app.post('/api/transactions/expense', async (req, res) => {
 });
 
 // DELETE expense by ID
-app.delete('/api/transactions/expense/:id', async (req, res) => {
+app.delete('/api/transactions/expense/:id', ensureDbConnection, async (req, res) => {
   try {
     const { id } = req.params;
     
