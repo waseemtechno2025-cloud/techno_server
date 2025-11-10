@@ -1952,6 +1952,7 @@ app.get('/api/transactions/income', async (req, res) => {
 // GET all expenses
 app.get('/api/transactions/expense', ensureDbConnection, async (req, res) => {
   try {
+    console.log('🎯 EXPENSE ENDPOINT STARTED');
     console.log('🔍 Database Name:', db.databaseName);
     console.log('🔍 Expected Database:', DB_NAME);
     console.log('🔍 MONGODB_URI exists:', !!MONGODB_URI);
@@ -2002,10 +2003,12 @@ app.get('/api/transactions/expense', ensureDbConnection, async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Error fetching expenses:', error);
+    console.error('❌ Error stack:', error.stack);
     res.status(500).json({
       success: false,
       message: 'Error fetching expenses',
-      error: error.message
+      error: error.message,
+      stack: error.stack
     });
   }
 });
