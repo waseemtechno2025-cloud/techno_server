@@ -411,19 +411,35 @@ app.post('/api/users', async (req, res) => {
       remainingAmount
     });
     
-    // Check if expiry date is TOMORROW - if yes, set showInExpiringSoon flag immediately
+    // Check if expiry date is TODAY (before 12 PM) or TOMORROW - if yes, set showInExpiringSoon flag
+    const currentHourPKT = nowInPKT.getUTCHours();
+    
     const tomorrowDate = new Date(Date.UTC(todayY, todayM, todayD + 1));
     const tomorrowY = tomorrowDate.getUTCFullYear();
     const tomorrowM = tomorrowDate.getUTCMonth();
     const tomorrowD = tomorrowDate.getUTCDate();
+    
+    const isExpiringToday = expiryYMD && 
+      expiryYMD.y === todayY && 
+      expiryYMD.m === todayM && 
+      expiryYMD.d === todayD;
     
     const isExpiringTomorrow = expiryYMD && 
       expiryYMD.y === tomorrowY && 
       expiryYMD.m === tomorrowM && 
       expiryYMD.d === tomorrowD;
     
-    if (isExpiringTomorrow) {
-      console.log('🔔 User expires TOMORROW - Setting showInExpiringSoon flag immediately');
+    // Set flag if:
+    // 1. Expires tomorrow (always)
+    // 2. Expires today BUT current time is before 12 PM
+    const shouldShowInExpiringSoon = isExpiringTomorrow || (isExpiringToday && currentHourPKT < 12);
+    
+    if (shouldShowInExpiringSoon) {
+      if (isExpiringToday && currentHourPKT < 12) {
+        console.log('🔔 User expires TODAY (before 12 PM) - Setting showInExpiringSoon flag immediately');
+      } else if (isExpiringTomorrow) {
+        console.log('🔔 User expires TOMORROW - Setting showInExpiringSoon flag immediately');
+      }
     }
 
     const newUser = {
@@ -446,7 +462,7 @@ app.post('/api/users', async (req, res) => {
       serviceStatus: 'active', // Service status: always active for new users
       paidAmount: paidAmount,
       remainingAmount: remainingAmount,
-      showInExpiringSoon: isExpiringTomorrow, // Set immediately if expires tomorrow
+      showInExpiringSoon: shouldShowInExpiringSoon, // Set if expires today (before 12 PM) or tomorrow
       createdAt: new Date()
     };
 
@@ -579,13 +595,14 @@ app.put('/api/users/:id', async (req, res) => {
       });
     }
     
-    // Check if expiry date is being updated and if it's TOMORROW
+    // Check if expiry date is being updated and if it's TODAY (before 12 PM) or TOMORROW
     if (expiryDate !== undefined) {
       const nowUTC = new Date();
       const nowInPKT = new Date(nowUTC.getTime() + PKT_OFFSET_MIN * 60000);
       const todayY = nowInPKT.getUTCFullYear();
       const todayM = nowInPKT.getUTCMonth();
       const todayD = nowInPKT.getUTCDate();
+      const currentHourPKT = nowInPKT.getUTCHours();
       
       const tomorrowDate = new Date(Date.UTC(todayY, todayM, todayD + 1));
       const tomorrowY = tomorrowDate.getUTCFullYear();
@@ -608,16 +625,31 @@ app.put('/api/users/:id', async (req, res) => {
       };
       
       const expiryYMD = parseExpiryDate(expiryDate);
+      
+      const isExpiringToday = expiryYMD && 
+        expiryYMD.y === todayY && 
+        expiryYMD.m === todayM && 
+        expiryYMD.d === todayD;
+      
       const isExpiringTomorrow = expiryYMD && 
         expiryYMD.y === tomorrowY && 
         expiryYMD.m === tomorrowM && 
         expiryYMD.d === tomorrowD;
       
-      if (isExpiringTomorrow) {
-        console.log('🔔 User expires TOMORROW - Setting showInExpiringSoon flag');
+      // Set flag if:
+      // 1. Expires tomorrow (always)
+      // 2. Expires today BUT current time is before 12 PM
+      const shouldShowInExpiringSoon = isExpiringTomorrow || (isExpiringToday && currentHourPKT < 12);
+      
+      if (shouldShowInExpiringSoon) {
+        if (isExpiringToday && currentHourPKT < 12) {
+          console.log('🔔 User expires TODAY (before 12 PM) - Setting showInExpiringSoon flag');
+        } else if (isExpiringTomorrow) {
+          console.log('🔔 User expires TOMORROW - Setting showInExpiringSoon flag');
+        }
         updateFields.showInExpiringSoon = true;
       } else {
-        // If expiry date is not tomorrow, remove flag
+        // If expiry date is not today/tomorrow, remove flag
         updateFields.showInExpiringSoon = false;
       }
     }
