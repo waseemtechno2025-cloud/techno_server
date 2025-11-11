@@ -1952,63 +1952,20 @@ app.get('/api/transactions/income', async (req, res) => {
 // GET all expenses
 app.get('/api/transactions/expense', ensureDbConnection, async (req, res) => {
   try {
-    console.log('🎯 EXPENSE ENDPOINT STARTED');
-    console.log('🔍 Database Name:', db.databaseName);
-    console.log('🔍 Expected Database:', DB_NAME);
-    console.log('🔍 MONGODB_URI exists:', !!MONGODB_URI);
-    console.log('🔍 Checking expenses collection...');
+    const expensesCollection = db.collection('expenses');
+    const expenses = await expensesCollection.find({}).sort({ date: -1 }).toArray();
     
-    // Ensure we're using the correct database
-    const correctDb = client.db(DB_NAME);
-    console.log('🔍 Correct DB Name:', correctDb.databaseName);
-    
-    // List all collections to verify expenses exists
-    const collections = await correctDb.listCollections().toArray();
-    const collectionNames = collections.map(c => c.name);
-    console.log('📋 All collections in', DB_NAME, ':', collectionNames);
-    
-    const hasExpenses = collectionNames.includes('expenses');
-    console.log('✅ Expenses collection exists:', hasExpenses);
-    
-    if (!hasExpenses) {
-      return res.status(200).json({
-        success: false,
-        message: 'Expenses collection does not exist',
-        database: correctDb.databaseName,
-        expectedDatabase: DB_NAME,
-        availableCollections: collectionNames
-      });
-    }
-    
-    // Count documents
-    const count = await correctDb.collection('expenses').countDocuments();
-    console.log('📊 Total documents in expenses:', count);
-    
-    // Fetch with detailed logging
-    const result = await correctDb.collection('expenses').find({}).sort({ date: -1 }).toArray();
-    console.log('✅ Fetched expenses:', result.length);
-    
-    if (result.length > 0) {
-      console.log('📄 Sample expense:', JSON.stringify(result[0]));
-    }
- 
     res.status(200).json({
       success: true,
-      count: result.length,
-      data: result,
-      debug: {
-        database: correctDb.databaseName,
-        expectedDatabase: DB_NAME
-      }
+      count: expenses.length,
+      data: expenses
     });
   } catch (error) {
-    console.error('❌ Error fetching expenses:', error);
-    console.error('❌ Error stack:', error.stack);
+    console.error('Error fetching expenses:', error);
     res.status(500).json({
       success: false,
       message: 'Error fetching expenses',
-      error: error.message,
-      stack: error.stack
+      error: error.message
     });
   }
 });
