@@ -1950,7 +1950,7 @@ app.get('/api/transactions/income', async (req, res) => {
 });
 
 // GET all expenses
-app.get('/api/transactions/expense', ensureDbConnection, async (req, res) => {
+app.get('/api/expense', ensureDbConnection, async (req, res) => {
   try {
     const expensesCollection = db.collection('expenses');
     const expenses = await expensesCollection.find({}).sort({ date: -1 }).toArray();
