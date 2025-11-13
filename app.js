@@ -1605,37 +1605,33 @@ app.get('/api/users/unpaid', async (req, res) => {
       const day = parseInt(dayStr, 10);
       
       if (!Number.isNaN(year) && !Number.isNaN(month) && !Number.isNaN(day)) {
-        // Helpers borrowed from paid-users filter to robustly match calendar day
-        const formatToIso = (date) => date.toISOString().split('T')[0];
-        const formatToLocal = (date) => {
+        // Match strictly by Asia/Karachi local calendar day
+        const formatLocalYMD = (date) => {
           try {
             return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(date);
           } catch (err) {
-            return formatToIso(date);
+            return date.toISOString().split('T')[0];
           }
         };
-        const normalizeToIsoString = (value) => {
+        const normalizeToLocalYMD = (value) => {
           if (!value) return null;
-          if (value instanceof Date) return [formatToIso(value), formatToLocal(value)];
+          if (value instanceof Date) return formatLocalYMD(value);
           if (typeof value === 'string') {
-            const native = new Date(value);
-            if (!Number.isNaN(native.getTime())) return [formatToIso(native), formatToLocal(native)];
-            const parts = value.split(/[-\/]/);
+            const str = value.trim();
+            if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+            const parts = str.split(/[-\/]/);
             if (parts.length === 3) {
               let [a, b, c] = parts;
-              if (a.length === 4) return [`${a}-${b.padStart(2, '0')}-${c.padStart(2, '0')}`];
-              const dayPart = a.padStart(2, '0');
-              const monthPart = b.padStart(2, '0');
-              const yearPart = c;
-              return [`${yearPart}-${monthPart}-${dayPart}`];
+              if (a.length === 4) return `${a}-${b.padStart(2, '0')}-${c.padStart(2, '0')}`;
+              // Convert DD-MM-YYYY or DD/MM/YYYY to YYYY-MM-DD
+              return `${c}-${b.padStart(2, '0')}-${a.padStart(2, '0')}`;
             }
           }
           return null;
         };
         const matchesTargetDate = (value) => {
-          const normalized = normalizeToIsoString(value);
-          if (!normalized) return false;
-          return normalized.some((iso) => iso === unpaidDate);
+          const local = normalizeToLocalYMD(value);
+          return local === unpaidDate;
         };
 
         // First, try to match by users.unpaidSince (most reliable going forward)
