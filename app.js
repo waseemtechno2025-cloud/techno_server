@@ -2161,6 +2161,113 @@ app.get('/api/expense', ensureDbConnection, async (req, res) => {
   }
 });
 
+// GET expenses grouped by month
+app.get('/api/expense/by-month', ensureDbConnection, async (req, res) => {
+  try {
+    const expensesCollection = db.collection('expenses');
+    const expenses = await expensesCollection.find({}).sort({ date: -1 }).toArray();
+    
+    // Group expenses by month
+    const expensesByMonth = {};
+    
+    expenses.forEach(expense => {
+      const date = new Date(expense.date);
+      // Format as "Month YYYY" (e.g., "November 2025")
+      const monthYear = date.toLocaleDateString('en-US', { 
+        year: 'numeric', 
+        month: 'long'
+      });
+      
+      if (!expensesByMonth[monthYear]) {
+        expensesByMonth[monthYear] = {
+          month: monthYear,
+          expenses: [],
+          totalAmount: 0,
+          count: 0
+        };
+      }
+      
+      expensesByMonth[monthYear].expenses.push(expense);
+      expensesByMonth[monthYear].totalAmount += expense.amount;
+      expensesByMonth[monthYear].count += 1;
+    });
+    
+    // Convert to array and sort by most recent month
+    const monthsArray = Object.values(expensesByMonth).sort((a, b) => {
+      const dateA = new Date(a.month);
+      const dateB = new Date(b.month);
+      return dateB.getTime() - dateA.getTime();
+    });
+    
+    // Always include current month if not present
+    const currentDate = new Date();
+    const currentMonth = currentDate.toLocaleDateString('en-US', { 
+      year: 'numeric', 
+      month: 'long'
+    });
+    
+    if (!expensesByMonth[currentMonth]) {
+      monthsArray.unshift({
+        month: currentMonth,
+        expenses: [],
+        totalAmount: 0,
+        count: 0
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      data: monthsArray
+    });
+  } catch (error) {
+    console.error('Error fetching expenses by month:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching expenses by month',
+      error: error.message
+    });
+  }
+});
+
+// GET expenses for a specific month
+app.get('/api/expense/:month', ensureDbConnection, async (req, res) => {
+  try {
+    const { month } = req.params;
+    if (!month) {
+      return res.status(400).json({
+        success: false,
+        message: 'Month parameter is required'
+      });
+    }
+    
+    const expensesCollection = db.collection('expenses');
+    const allExpenses = await expensesCollection.find({}).toArray();
+    
+    // Filter expenses for the specified month
+    const filteredExpenses = allExpenses.filter(expense => {
+      const date = new Date(expense.date);
+      const expenseMonth = date.toLocaleDateString('en-US', { 
+        year: 'numeric', 
+        month: 'long'
+      });
+      return expenseMonth === month;
+    });
+    
+    res.status(200).json({
+      success: true,
+      data: filteredExpenses,
+      month
+    });
+  } catch (error) {
+    console.error('Error fetching expenses by month:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching expenses by month',
+      error: error.message
+    });
+  }
+});
+
 // DEBUG endpoint to check collections
 app.get('/api/debug/collections', ensureDbConnection, async (req, res) => {
   try {
