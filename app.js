@@ -1565,6 +1565,7 @@ app.get('/api/users/unpaid', async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const expiryDate = req.query.expiryDate; // YYYY-MM-DD format
+    const unpaidDate = req.query.unpaidDate; // YYYY-MM-DD format - date user became unpaid
     
     // Base query - Only show unpaid status (exclude pending) and active users
     let query = {
@@ -1579,8 +1580,66 @@ app.get('/api/users/unpaid', async (req, res) => {
       ]
     };
     
-    // If expiry date filter is provided, check both vouchers and users collections
-    if (expiryDate) {
+    // If unpaidDate filter is provided, match users who BECAME unpaid on that calendar day
+    if (unpaidDate) {
+      const [yearStr, monthStr, dayStr] = String(unpaidDate).split('-');
+      const year = parseInt(yearStr, 10);
+      const month = parseInt(monthStr, 10) - 1; // JS Date month is 0-indexed
+      const day = parseInt(dayStr, 10);
+      
+      if (!Number.isNaN(year) && !Number.isNaN(month) && !Number.isNaN(day)) {
+        // Helpers borrowed from paid-users filter to robustly match calendar day
+        const formatToIso = (date) => date.toISOString().split('T')[0];
+        const formatToLocal = (date) => {
+          try {
+            return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(date);
+          } catch (err) {
+            return formatToIso(date);
+          }
+        };
+        const normalizeToIsoString = (value) => {
+          if (!value) return null;
+          if (value instanceof Date) return [formatToIso(value), formatToLocal(value)];
+          if (typeof value === 'string') {
+            const native = new Date(value);
+            if (!Number.isNaN(native.getTime())) return [formatToIso(native), formatToLocal(native)];
+            const parts = value.split(/[-\/]/);
+            if (parts.length === 3) {
+              let [a, b, c] = parts;
+              if (a.length === 4) return [`${a}-${b.padStart(2, '0')}-${c.padStart(2, '0')}`];
+              const dayPart = a.padStart(2, '0');
+              const monthPart = b.padStart(2, '0');
+              const yearPart = c;
+              return [`${yearPart}-${monthPart}-${dayPart}`];
+            }
+          }
+          return null;
+        };
+        const matchesTargetDate = (value) => {
+          const normalized = normalizeToIsoString(value);
+          if (!normalized) return false;
+          return normalized.some((iso) => iso === unpaidDate);
+        };
+
+        // Find vouchers where a month entry was created/dated on that day with unpaid status
+        const vouchers = await vouchersCollection.find({ 'months.status': 'unpaid' }).toArray();
+        const filtered = vouchers.filter((voucher) => {
+          const months = Array.isArray(voucher.months) ? voucher.months : [];
+          return months.some((m) => m && m.status === 'unpaid' && (matchesTargetDate(m.createdAt) || matchesTargetDate(m.date)));
+        });
+        const userIds = filtered.map(v => v.userId);
+        if (userIds.length === 0) {
+          return res.status(200).json({ success: true, data: [], totalCount: 0, page, limit });
+        }
+        const objectIds = userIds.map(id => new ObjectId(id));
+        query._id = { $in: objectIds };
+        console.log(`🔍 Unpaid users filter by unpaidDate=${unpaidDate}, matched users: ${userIds.length}`);
+      } else {
+        console.log(`⚠️ Invalid unpaidDate received: ${unpaidDate}`);
+      }
+    }
+    // Else, if expiry date filter is provided, check both vouchers and users collections (legacy behavior)
+    else if (expiryDate) {
       const [year, month, day] = expiryDate.split('-');
       const dateWithHyphen = `${day}-${month}-${year}`;
       const dateWithSlash = `${day}/${month}/${year}`;
