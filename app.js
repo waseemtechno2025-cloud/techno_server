@@ -1333,12 +1333,24 @@ app.get('/api/dashboard/stats', async (req, res) => {
     }).toArray();
     const totalIncome = incomeUsers.reduce((sum, user) => sum + Number(user.paidAmount || user.amount || 0), 0);
     
-    // Total expense
-    const expenseResult = await transactionsCollection.aggregate([
+    // Total expense - combine both transactions and expenses collections
+    const expenseResultFromTransactions = await transactionsCollection.aggregate([
       { $match: { type: 'expense' } },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]).toArray();
-    const totalExpense = expenseResult.length > 0 ? expenseResult[0].total : 0;
+    
+    // Get expenses from dedicated expenses collection
+    const expensesCollection = db.collection('expenses');
+    const expenseResultFromExpenses = await expensesCollection.aggregate([
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]).toArray();
+    
+    const transactionsExpenseTotal = expenseResultFromTransactions.length > 0 ? expenseResultFromTransactions[0].total : 0;
+    const expensesTotal = expenseResultFromExpenses.length > 0 ? expenseResultFromExpenses[0].total : 0;
+    
+    // Add both totals for the complete expense amount
+    const totalExpense = Number(transactionsExpenseTotal) + Number(expensesTotal);
+    console.log(`💰 Dashboard stats: Total expense = ${totalExpense} (transactions: ${transactionsExpenseTotal}, expenses: ${expensesTotal})`);
     
     // Outstanding/Balance - Calculate from vouchers to match unpaid-users.tsx display amounts
     const vouchersCollection = db.collection('vouchers');
@@ -2331,6 +2343,23 @@ app.post('/api/transactions/expense', ensureDbConnection, async (req, res) => {
     
     // Get the created expense
     const createdExpense = await expensesCollection.findOne({ _id: result.insertedId });
+    
+    // Also create a transaction record for consistency
+    try {
+      const transactionsCollection = db.collection('transactions');
+      await transactionsCollection.insertOne({
+        amount: expense.amount,
+        description: expense.description,
+        type: 'expense',
+        category: expense.category,
+        paidTo: expense.paidTo,
+        paymentDate: expense.date,
+        createdAt: expense.createdAt
+      });
+    } catch (transactionError) {
+      console.log('⚠️ Could not create transaction record for expense:', transactionError);
+      // Continue even if transaction record fails
+    }
     
     console.log('✅ Expense added:', createdExpense);
     
