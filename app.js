@@ -462,6 +462,7 @@ app.post('/api/users', async (req, res) => {
       serviceStatus: 'active', // Service status: always active for new users
       paidAmount: paidAmount,
       remainingAmount: remainingAmount,
+      unpaidSince: paymentStatus === 'unpaid' ? new Date() : null,
       showInExpiringSoon: shouldShowInExpiringSoon, // Set if expires today (before 12 PM) or tomorrow
       createdAt: new Date()
     };
@@ -587,6 +588,22 @@ app.put('/api/users/:id', async (req, res) => {
     if (serviceStatus !== undefined) updateFields.serviceStatus = serviceStatus;
     if (paidAmount !== undefined) updateFields.paidAmount = paidAmount || 0;
     if (remainingAmount !== undefined) updateFields.remainingAmount = remainingAmount || 0;
+
+    // If status is being changed, manage unpaidSince timestamp
+    if (status !== undefined) {
+      // Fetch current user to detect transitions
+      const existingUser = await usersCollection.findOne(
+        { _id: new ObjectId(req.params.id) },
+        { projection: { status: 1, unpaidSince: 1 } }
+      );
+      if (status === 'unpaid') {
+        // Set unpaidSince only if not already set
+        if (!existingUser?.unpaidSince) updateFields.unpaidSince = new Date();
+      } else {
+        // Clearing unpaid state, remove timestamp
+        if (existingUser?.unpaidSince) updateFields.unpaidSince = null;
+      }
+    }
 
     if (Object.keys(updateFields).length === 0) {
       return res.status(400).json({
@@ -1621,19 +1638,45 @@ app.get('/api/users/unpaid', async (req, res) => {
           return normalized.some((iso) => iso === unpaidDate);
         };
 
-        // Find vouchers where a month entry was created/dated on that day with unpaid status
-        const vouchers = await vouchersCollection.find({ 'months.status': 'unpaid' }).toArray();
-        const filtered = vouchers.filter((voucher) => {
-          const months = Array.isArray(voucher.months) ? voucher.months : [];
-          return months.some((m) => m && m.status === 'unpaid' && (matchesTargetDate(m.createdAt) || matchesTargetDate(m.date)));
-        });
-        const userIds = filtered.map(v => v.userId);
-        if (userIds.length === 0) {
-          return res.status(200).json({ success: true, data: [], totalCount: 0, page, limit });
+        // First, try to match by users.unpaidSince (most reliable going forward)
+        const unpaidSinceCandidates = await usersCollection.find({
+          status: 'unpaid',
+          $or: [
+            { serviceStatus: { $ne: 'inactive' } },
+            { serviceStatus: { $exists: false } }
+          ],
+          unpaidSince: { $exists: true }
+        }).project({ _id: 1, unpaidSince: 1 }).toArray();
+
+        const idsByUnpaidSince = unpaidSinceCandidates
+          .filter(u => matchesTargetDate(u.unpaidSince))
+          .map(u => u._id);
+
+        if (idsByUnpaidSince.length > 0) {
+          query._id = { $in: idsByUnpaidSince };
+          console.log(`🔍 Unpaid users by unpaidSince=${unpaidDate}: ${idsByUnpaidSince.length}`);
+        } else {
+          // Fallback for older records: look at voucher months CREATED that day with unpaid status
+          const vouchers = await vouchersCollection.find({ 'months.status': 'unpaid' }).toArray();
+          const filtered = vouchers.filter((voucher) => {
+            const months = Array.isArray(voucher.months) ? voucher.months : [];
+            const unpaidMonths = months.filter(m => m && m.status === 'unpaid' && m.createdAt);
+            if (unpaidMonths.length === 0) return false;
+            // Find earliest createdAt among unpaid months
+            const earliest = unpaidMonths.reduce((min, m) => {
+              const d = new Date(m.createdAt);
+              return (!min || d < min) ? d : min;
+            }, null);
+            return earliest ? matchesTargetDate(earliest) : false;
+          });
+          const userIds = filtered.map(v => v.userId);
+          if (userIds.length === 0) {
+            return res.status(200).json({ success: true, data: [], totalCount: 0, page, limit });
+          }
+          const objectIds = userIds.map(id => new ObjectId(id));
+          query._id = { $in: objectIds };
+          console.log(`🔍 Unpaid users by vouchers for unpaidDate=${unpaidDate}: ${userIds.length}`);
         }
-        const objectIds = userIds.map(id => new ObjectId(id));
-        query._id = { $in: objectIds };
-        console.log(`🔍 Unpaid users filter by unpaidDate=${unpaidDate}, matched users: ${userIds.length}`);
       } else {
         console.log(`⚠️ Invalid unpaidDate received: ${unpaidDate}`);
       }
@@ -2930,7 +2973,8 @@ const moveTodayExpiredToUnpaid = async () => {
             $set: { 
               status: 'unpaid',
               expiryDate: newExpiryDateStr,
-              showInExpiringSoon: false
+              showInExpiringSoon: false,
+              unpaidSince: new Date()
             } 
           }
         );
