@@ -1037,6 +1037,50 @@ app.delete('/api/employees/:id', async (req, res) => {
   }
 });
 
+// POST route to authenticate employee login
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Username and password are required'
+      });
+    }
+
+    // Find employee with matching username and password
+    const employee = await employeesCollection.findOne({
+      username: username.trim(),
+      password: password.trim(),
+      isActive: { $ne: false } // Only allow active employees to login
+    });
+
+    if (!employee) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid username or password'
+      });
+    }
+
+    // Return success with employee data (excluding password)
+    const { password: _, ...employeeData } = employee;
+    res.status(200).json({
+      success: true,
+      message: 'Login successful',
+      data: employeeData
+    });
+
+  } catch (error) {
+    console.error('Error during login:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error during login',
+      error: error.message
+    });
+  }
+});
+
 // ============ EQUIPMENT (SWITCH & SPLITTER) API ROUTES ============
 
 // POST route to add equipment
