@@ -906,12 +906,12 @@ app.delete('/api/packages/:id', async (req, res) => {
 // POST route to add an employee
 app.post('/api/employees/add', async (req, res) => {
   try {
-    const { name, number, role, salary, isActive } = req.body;
+    const { name, number, role, salary, username, password, isActive } = req.body;
 
-    if (!name || !number || !role || salary === undefined) {
+    if (!name || !number || !role || salary === undefined || !username || !password) {
       return res.status(400).json({
         success: false,
-        message: 'Name, number, role, and salary are required'
+        message: 'Name, number, role, salary, username, and password are required'
       });
     }
 
@@ -920,6 +920,8 @@ app.post('/api/employees/add', async (req, res) => {
       number: number.trim(),
       role: role.trim(),
       salary: parseFloat(salary),
+      username: username.trim(),
+      password: password.trim(),
       isActive: isActive !== undefined ? isActive : true,
       createdAt: new Date()
     };
@@ -966,12 +968,12 @@ app.get('/api/employees', async (req, res) => {
 // PUT route to update an employee
 app.put('/api/employees/:id', async (req, res) => {
   try {
-    const { name, number, role, salary, isActive } = req.body;
+    const { name, number, role, salary, username, password, isActive } = req.body;
 
-    if (!name || !number || !role || salary === undefined) {
+    if (!name || !number || !role || salary === undefined || !username || !password) {
       return res.status(400).json({
         success: false,
-        message: 'Name, number, role, and salary are required'
+        message: 'Name, number, role, salary, username, and password are required'
       });
     }
 
@@ -983,6 +985,8 @@ app.put('/api/employees/:id', async (req, res) => {
           number: number.trim(), 
           role: role.trim(), 
           salary: parseFloat(salary),
+          username: username.trim(),
+          password: password.trim(),
           isActive: isActive !== undefined ? isActive : true
         } 
       }
