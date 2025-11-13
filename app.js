@@ -1040,7 +1040,7 @@ app.delete('/api/employees/:id', async (req, res) => {
 // POST route to authenticate employee login
 app.post('/api/auth/login', async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { username, password, role } = req.body;
 
     if (!username || !password) {
       return res.status(400).json({
@@ -1060,6 +1060,14 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({
         success: false,
         message: 'Invalid username or password'
+      });
+    }
+
+    // Optional: Validate role if provided
+    if (role && employee.role && employee.role.toLowerCase() !== role.toLowerCase()) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid role for this user'
       });
     }
 
