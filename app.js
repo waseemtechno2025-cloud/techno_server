@@ -1306,9 +1306,15 @@ app.get('/api/dashboard/stats', async (req, res) => {
       status: 'inactive'
     });
     
-    // Total income (sum of all paidAmount from users)
-    const allUsers = await usersCollection.find({}).toArray();
-    const totalIncome = allUsers.reduce((sum, user) => sum + Number(user.paidAmount || 0), 0);
+    // Total income (align with paid-users list: include 'paid' and 'partial' active users)
+    const incomeUsers = await usersCollection.find({
+      status: { $in: ['paid', 'partial'] },
+      $or: [
+        { serviceStatus: { $ne: 'inactive' } },
+        { serviceStatus: { $exists: false } }
+      ]
+    }).toArray();
+    const totalIncome = incomeUsers.reduce((sum, user) => sum + Number(user.paidAmount || user.amount || 0), 0);
     
     // Total expense
     const expenseResult = await transactionsCollection.aggregate([
