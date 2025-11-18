@@ -316,6 +316,7 @@ app.post('/api/users', async (req, res) => {
       streetName, 
       switchSplitter, 
       assignTo, 
+      feeCollector,
       rechargeDate, 
       expiryDate,
       status,
@@ -456,6 +457,7 @@ app.post('/api/users', async (req, res) => {
       streetName: streetName || '',
       switchSplitter: switchSplitter ? switchSplitter.trim() : '',
       assignTo: assignTo ? assignTo.trim() : '',
+      feeCollector: feeCollector ? feeCollector.trim() : '',
       rechargeDate: rechargeDate || null,
       expiryDate: expiryDate || null,
       status: paymentStatus, // Payment status: paid, unpaid, partial, pending
@@ -557,6 +559,7 @@ app.put('/api/users/:id', async (req, res) => {
       streetName, 
       switchSplitter, 
       assignTo, 
+      feeCollector,
       rechargeDate, 
       expiryDate, 
       networkType,
@@ -581,6 +584,7 @@ app.put('/api/users/:id', async (req, res) => {
     if (streetName !== undefined) updateFields.streetName = streetName || '';
     if (switchSplitter !== undefined) updateFields.switchSplitter = switchSplitter ? switchSplitter.trim() : '';
     if (assignTo !== undefined) updateFields.assignTo = assignTo ? assignTo.trim() : '';
+    if (feeCollector !== undefined) updateFields.feeCollector = feeCollector ? feeCollector.trim() : '';
     if (rechargeDate !== undefined) updateFields.rechargeDate = rechargeDate || null;
     if (expiryDate !== undefined) updateFields.expiryDate = expiryDate || null;
     if (networkType !== undefined) updateFields.networkType = networkType || 'local';
@@ -3978,10 +3982,15 @@ app.get('/api/sales/total', async (req, res) => {
 });
 
 // ============ VOUCHERS ROUTES ============
-// Get all vouchers
+// Get all vouchers (or filter by userId if query parameter provided)
 app.get('/api/vouchers', ensureDbConnection, async (req, res) => {
   try {
-    const vouchers = await vouchersCollection.find({}).toArray();
+    const { userId } = req.query;
+    
+    // If userId query parameter is provided, filter by userId
+    const query = userId ? { userId } : {};
+    const vouchers = await vouchersCollection.find(query).toArray();
+    
     res.status(200).json({
       success: true,
       data: vouchers
