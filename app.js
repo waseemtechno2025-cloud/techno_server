@@ -1071,10 +1071,11 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     // Find employee with matching username and password
+    // Only allow active employees to login - strictly check isActive: true
     const employee = await employeesCollection.findOne({
       username: username.trim(),
       password: password.trim(),
-      isActive: { $ne: false } // Only allow active employees to login
+      isActive: true // Only active employees can login
     });
 
     if (!employee) {
