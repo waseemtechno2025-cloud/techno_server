@@ -522,16 +522,18 @@ app.get('/api/users', async (req, res) => {
       };
     }
     
-    // Filter by fee collector if provided
+    // Filter by fee collector if provided (case-insensitive)
     if (feeCollector) {
-      query.feeCollector = feeCollector.trim();
-      console.log(`🔍 Filtering by fee collector: ${feeCollector}`);
+      const feeCollectorTrimmed = feeCollector.trim();
+      query.feeCollector = { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') };
+      console.log(`🔍 Filtering /api/users by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
     }
     
-    // Filter by assignTo (technician) if provided
+    // Filter by assignTo (technician) if provided (case-insensitive)
     if (assignTo) {
-      query.assignTo = assignTo.trim();
-      console.log(`🔍 Filtering by assignTo (technician): ${assignTo}`);
+      const assignToTrimmed = assignTo.trim();
+      query.assignTo = { $regex: new RegExp(`^${assignToTrimmed}$`, 'i') };
+      console.log(`🔍 Filtering /api/users by assignTo (technician, case-insensitive): ${assignToTrimmed}`);
     }
     
     const users = await usersCollection.find(query).sort({ userName: 1 }).toArray();
@@ -1304,12 +1306,14 @@ app.get('/api/dashboard/stats', async (req, res) => {
     // Build base user query filter
     let userFilter = {};
     if (feeCollector) {
-      userFilter.feeCollector = feeCollector.trim();
-      console.log(`🔍 Filtering dashboard stats by feeCollector: ${feeCollector}`);
+      const feeCollectorTrimmed = feeCollector.trim();
+      userFilter.feeCollector = { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') };
+      console.log(`🔍 Filtering dashboard stats by feeCollector (case-insensitive): ${feeCollectorTrimmed}`);
     }
     if (assignTo) {
-      userFilter.assignTo = assignTo.trim();
-      console.log(`🔍 Filtering dashboard stats by assignTo: ${assignTo}`);
+      const assignToTrimmed = assignTo.trim();
+      userFilter.assignTo = { $regex: new RegExp(`^${assignToTrimmed}$`, 'i') };
+      console.log(`🔍 Filtering dashboard stats by assignTo (case-insensitive): ${assignToTrimmed}`);
     }
     
     // Get user IDs that match the filter (for voucher filtering)
@@ -1394,10 +1398,10 @@ app.get('/api/dashboard/stats', async (req, res) => {
       paidUsersQuery._id = { $in: paidUserIds };
     }
     if (feeCollector) {
-      paidUsersQuery.feeCollector = feeCollector.trim();
+      paidUsersQuery.feeCollector = { $regex: new RegExp(`^${feeCollector.trim()}$`, 'i') };
     }
     if (assignTo) {
-      paidUsersQuery.assignTo = assignTo.trim();
+      paidUsersQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
     }
     
     const paidUsers = paidUserIds.length > 0 ? await usersCollection.countDocuments(paidUsersQuery) : 0;
@@ -1422,10 +1426,10 @@ app.get('/api/dashboard/stats', async (req, res) => {
       unpaidUsersQuery._id = { $in: unpaidUserIds };
     }
     if (feeCollector) {
-      unpaidUsersQuery.feeCollector = feeCollector.trim();
+      unpaidUsersQuery.feeCollector = { $regex: new RegExp(`^${feeCollector.trim()}$`, 'i') };
     }
     if (assignTo) {
-      unpaidUsersQuery.assignTo = assignTo.trim();
+      unpaidUsersQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
     }
     
     const unpaidUsers = unpaidUserIds.length > 0 ? await usersCollection.countDocuments(unpaidUsersQuery) : 0;
@@ -1452,10 +1456,10 @@ app.get('/api/dashboard/stats', async (req, res) => {
       ]
     };
     if (feeCollector) {
-      expiringSoonQuery.feeCollector = feeCollector.trim();
+      expiringSoonQuery.feeCollector = { $regex: new RegExp(`^${feeCollector.trim()}$`, 'i') };
     }
     if (assignTo) {
-      expiringSoonQuery.assignTo = assignTo.trim();
+      expiringSoonQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
     }
     
     const expiringSoon = await usersCollection.countDocuments(expiringSoonQuery);
@@ -1474,10 +1478,10 @@ app.get('/api/dashboard/stats', async (req, res) => {
       ]
     };
     if (feeCollector) {
-      incomeUsersQuery.feeCollector = feeCollector.trim();
+      incomeUsersQuery.feeCollector = { $regex: new RegExp(`^${feeCollector.trim()}$`, 'i') };
     }
     if (assignTo) {
-      incomeUsersQuery.assignTo = assignTo.trim();
+      incomeUsersQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
     }
     
     const incomeUsers = await usersCollection.find(incomeUsersQuery).toArray();
@@ -1515,10 +1519,10 @@ app.get('/api/dashboard/stats', async (req, res) => {
       ]
     };
     if (feeCollector) {
-      unpaidUsersListQuery.feeCollector = feeCollector.trim();
+      unpaidUsersListQuery.feeCollector = { $regex: new RegExp(`^${feeCollector.trim()}$`, 'i') };
     }
     if (assignTo) {
-      unpaidUsersListQuery.assignTo = assignTo.trim();
+      unpaidUsersListQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
     }
     
     const unpaidUsersList = await usersCollection.find(unpaidUsersListQuery).toArray();
@@ -1532,10 +1536,10 @@ app.get('/api/dashboard/stats', async (req, res) => {
       ]
     };
     if (feeCollector) {
-      partialUsersQuery.feeCollector = feeCollector.trim();
+      partialUsersQuery.feeCollector = { $regex: new RegExp(`^${feeCollector.trim()}$`, 'i') };
     }
     if (assignTo) {
-      partialUsersQuery.assignTo = assignTo.trim();
+      partialUsersQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
     }
     
     const partialUsers = await usersCollection.find(partialUsersQuery).toArray();
@@ -1733,10 +1737,11 @@ app.get('/api/users/paid', async (req, res) => {
       ]
     };
     
-    // Filter by fee collector if provided
+    // Filter by fee collector if provided (case-insensitive)
     if (feeCollector) {
-      query.feeCollector = feeCollector.trim();
-      console.log(`🔍 Filtering by fee collector: ${feeCollector}`);
+      const feeCollectorTrimmed = feeCollector.trim();
+      query.feeCollector = { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') };
+      console.log(`🔍 Filtering /api/users/paid by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
     }
     
     // Add user ID filter if we have users with paid months
@@ -1850,10 +1855,11 @@ app.get('/api/users/unpaid', async (req, res) => {
       ]
     };
     
-    // Filter by fee collector if provided
+    // Filter by fee collector if provided (case-insensitive)
     if (feeCollector) {
-      query.$and.push({ feeCollector: feeCollector.trim() });
-      console.log(`🔍 Filtering by fee collector: ${feeCollector}`);
+      const feeCollectorTrimmed = feeCollector.trim();
+      query.$and.push({ feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') } });
+      console.log(`🔍 Filtering /api/users/unpaid by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
     }
     
     // Add filter for users with unpaid months if no date filter
@@ -2120,6 +2126,7 @@ app.get('/api/balances', async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const expiryDate = req.query.expiryDate; // YYYY-MM-DD format
+    const feeCollector = req.query.feeCollector; // Fee collector name filter
     
     // Base query
     let query = {
@@ -2134,6 +2141,13 @@ app.get('/api/balances', async (req, res) => {
         }
       ]
     };
+    
+    // Filter by fee collector if provided (case-insensitive)
+    if (feeCollector) {
+      const feeCollectorTrimmed = feeCollector.trim();
+      query.$and.push({ feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') } });
+      console.log(`🔍 Filtering /api/balances by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
+    }
     
     // If expiry date filter is provided, check both vouchers and users collections
     if (expiryDate) {
@@ -2251,10 +2265,11 @@ app.get('/api/users/expiring-soon', async (req, res) => {
       query.showInExpiringSoon = true;
     }
     
-    // Filter by fee collector if provided
+    // Filter by fee collector if provided (case-insensitive)
     if (feeCollector) {
-      query.feeCollector = feeCollector.trim();
-      console.log(`🔍 Filtering by fee collector: ${feeCollector}`);
+      const feeCollectorTrimmed = feeCollector.trim();
+      query.feeCollector = { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') };
+      console.log(`🔍 Filtering /api/users/expiring-soon by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
     }
     
     const usersAll = await usersCollection.find(query).toArray();
