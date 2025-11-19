@@ -1280,28 +1280,68 @@ app.get('/api/dashboard/stats', async (req, res) => {
   try {
     const usersCollection = db.collection('users');
     const transactionsCollection = db.collection('transactions');
+    const vouchersCol = db.collection('vouchers');
     
     // Total users
     const totalUsers = await usersCollection.countDocuments();
     
-    // Paid users (includes both fully paid AND partial - exclude inactive)
-    // Partial users appear in BOTH paid and unpaid tabs
-    const paidUsers = await usersCollection.countDocuments({
-      status: { $in: ['paid', 'partial'] },
-      $or: [
-        { serviceStatus: { $ne: 'inactive' } },
-        { serviceStatus: { $exists: false } }
-      ]
+    // CRITICAL: Month-level counting - count users with AT LEAST ONE paid month
+    const vouchersForStats = await vouchersCol.find({}).toArray();
+    
+    const userIdsWithPaidMonths = new Set();
+    const userIdsWithUnpaidMonths = new Set();
+    
+    vouchersForStats.forEach(voucher => {
+      if (Array.isArray(voucher.months)) {
+        const hasPaidMonth = voucher.months.some(m => 
+          m.status === 'paid' || (m.status === 'partial' && m.paidAmount > 0)
+        );
+        const hasUnpaidMonth = voucher.months.some(m => 
+          m.status === 'unpaid' || (m.status === 'partial' && m.remainingAmount > 0)
+        );
+        
+        if (hasPaidMonth && voucher.userId) {
+          userIdsWithPaidMonths.add(voucher.userId.toString());
+        }
+        if (hasUnpaidMonth && voucher.userId) {
+          userIdsWithUnpaidMonths.add(voucher.userId.toString());
+        }
+      }
     });
     
-    // Unpaid users (includes partial - exclude inactive)
-    const unpaidUsers = await usersCollection.countDocuments({
-      status: { $in: ['unpaid', 'partial'] },
+    // Count paid users (users with at least one paid month) - exclude inactive
+    const paidUserIds = Array.from(userIdsWithPaidMonths).map(id => {
+      try {
+        return new ObjectId(id);
+      } catch (e) {
+        return id;
+      }
+    });
+    
+    const paidUsers = paidUserIds.length > 0 ? await usersCollection.countDocuments({
+      _id: { $in: paidUserIds },
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
       ]
+    }) : 0;
+    
+    // Count unpaid users (users with at least one unpaid month) - exclude inactive
+    const unpaidUserIds = Array.from(userIdsWithUnpaidMonths).map(id => {
+      try {
+        return new ObjectId(id);
+      } catch (e) {
+        return id;
+      }
     });
+    
+    const unpaidUsers = unpaidUserIds.length > 0 ? await usersCollection.countDocuments({
+      _id: { $in: unpaidUserIds },
+      $or: [
+        { serviceStatus: { $ne: 'inactive' } },
+        { serviceStatus: { $exists: false } }
+      ]
+    }) : 0;
     
     // Expiring soon (TOMORROW) - include paid/partial/unpaid/pending users based on expiry date
     // NOTE: Include unpaid and pending so "Pay Later" and checkbox users also count when expiring tomorrow
@@ -3255,7 +3295,12 @@ const moveTodayExpiredToUnpaid = async () => {
         
         const currentExpiryDate = parseDate(user.expiryDate);
         
-        // Calculate next month's expiry date
+        // CRITICAL: Voucher should be for the CURRENT expiry month, not next month
+        // Example: If expiry is 20 Nov, voucher should be for November (current expiry month)
+        // The next expiry date is only for updating user's expiry date for next cycle
+        const monthName = currentExpiryDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+        
+        // Calculate next month's expiry date (for updating user's expiry date)
         const nextExpiryDate = new Date(currentExpiryDate);
         nextExpiryDate.setMonth(nextExpiryDate.getMonth() + 1);
         
@@ -3268,10 +3313,9 @@ const moveTodayExpiredToUnpaid = async () => {
         };
         
         const newExpiryDateStr = formatDate(nextExpiryDate);
-        const monthName = nextExpiryDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
         
-        console.log(`   → Creating next month voucher: ${monthName}`);
-        console.log(`   → New expiry date: ${newExpiryDateStr}`);
+        console.log(`   → Creating voucher for current expiry month: ${monthName}`);
+        console.log(`   → New expiry date for next cycle: ${newExpiryDateStr}`);
         
         // Update user: change to unpaid, update expiry date, remove from Expiring Soon
         await usersCollection.updateOne(
@@ -3304,7 +3348,7 @@ const moveTodayExpiredToUnpaid = async () => {
           paymentType: 'later',
           status: 'unpaid',
           description: `${monthName} - Pending Payment`,
-          date: new Date(),
+          date: currentExpiryDate.toISOString(), // Use current expiry date for the month date
           createdAt: new Date()
         };
         
