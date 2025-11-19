@@ -1297,11 +1297,61 @@ app.get('/api/dashboard/stats', async (req, res) => {
     const transactionsCollection = db.collection('transactions');
     const vouchersCol = db.collection('vouchers');
     
-    // Total users
-    const totalUsers = await usersCollection.countDocuments();
+    // Get filter parameters
+    const feeCollector = req.query.feeCollector;
+    const assignTo = req.query.assignTo;
+    
+    // Build base user query filter
+    let userFilter = {};
+    if (feeCollector) {
+      userFilter.feeCollector = feeCollector.trim();
+      console.log(`🔍 Filtering dashboard stats by feeCollector: ${feeCollector}`);
+    }
+    if (assignTo) {
+      userFilter.assignTo = assignTo.trim();
+      console.log(`🔍 Filtering dashboard stats by assignTo: ${assignTo}`);
+    }
+    
+    // Get user IDs that match the filter (for voucher filtering)
+    let filteredUserIds = null;
+    if (feeCollector || assignTo) {
+      const filteredUsers = await usersCollection.find(userFilter).toArray();
+      filteredUserIds = filteredUsers.map(u => u._id.toString());
+      console.log(`📊 Found ${filteredUserIds.length} users matching filter`);
+      
+      // If filter is applied but no users match, return all zeros
+      if (filteredUserIds.length === 0) {
+        console.log(`⚠️ No users found for filter - returning zero stats`);
+        return res.status(200).json({
+          success: true,
+          data: {
+            totalUsers: 0,
+            paidUsers: 0,
+            totalIncome: 0,
+            totalExpense: 0,
+            unpaidUsers: 0,
+            outstanding: 0,
+            balance: 0,
+            balanceCustomers: 0,
+            expiringSoon: 0,
+            deactivatedUsers: 0
+          }
+        });
+      }
+    }
+    
+    // Total users (with filter if provided)
+    const totalUsers = await usersCollection.countDocuments(userFilter);
     
     // CRITICAL: Month-level counting - count users with AT LEAST ONE paid month
-    const vouchersForStats = await vouchersCol.find({}).toArray();
+    // Filter vouchers by user IDs if filter is applied
+    let vouchersForStats = await vouchersCol.find({}).toArray();
+    if (filteredUserIds && filteredUserIds.length > 0) {
+      vouchersForStats = vouchersForStats.filter(v => 
+        v.userId && filteredUserIds.includes(v.userId.toString())
+      );
+      console.log(`📊 Filtered vouchers: ${vouchersForStats.length} vouchers for ${filteredUserIds.length} users`);
+    }
     
     const userIdsWithPaidMonths = new Set();
     const userIdsWithUnpaidMonths = new Set();
@@ -1333,13 +1383,24 @@ app.get('/api/dashboard/stats', async (req, res) => {
       }
     });
     
-    const paidUsers = paidUserIds.length > 0 ? await usersCollection.countDocuments({
-      _id: { $in: paidUserIds },
+    // Build paid users query with filter
+    let paidUsersQuery = {
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
       ]
-    }) : 0;
+    };
+    if (paidUserIds.length > 0) {
+      paidUsersQuery._id = { $in: paidUserIds };
+    }
+    if (feeCollector) {
+      paidUsersQuery.feeCollector = feeCollector.trim();
+    }
+    if (assignTo) {
+      paidUsersQuery.assignTo = assignTo.trim();
+    }
+    
+    const paidUsers = paidUserIds.length > 0 ? await usersCollection.countDocuments(paidUsersQuery) : 0;
     
     // Count unpaid users (users with at least one unpaid month) - exclude inactive
     const unpaidUserIds = Array.from(userIdsWithUnpaidMonths).map(id => {
@@ -1350,13 +1411,24 @@ app.get('/api/dashboard/stats', async (req, res) => {
       }
     });
     
-    const unpaidUsers = unpaidUserIds.length > 0 ? await usersCollection.countDocuments({
-      _id: { $in: unpaidUserIds },
+    // Build unpaid users query with filter
+    let unpaidUsersQuery = {
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
       ]
-    }) : 0;
+    };
+    if (unpaidUserIds.length > 0) {
+      unpaidUsersQuery._id = { $in: unpaidUserIds };
+    }
+    if (feeCollector) {
+      unpaidUsersQuery.feeCollector = feeCollector.trim();
+    }
+    if (assignTo) {
+      unpaidUsersQuery.assignTo = assignTo.trim();
+    }
+    
+    const unpaidUsers = unpaidUserIds.length > 0 ? await usersCollection.countDocuments(unpaidUsersQuery) : 0;
     
     // Expiring soon (TOMORROW) - include paid/partial/unpaid/pending users based on expiry date
     // NOTE: Include unpaid and pending so "Pay Later" and checkbox users also count when expiring tomorrow
@@ -1367,7 +1439,8 @@ app.get('/api/dashboard/stats', async (req, res) => {
     const endOfTomorrow = new Date(tomorrow);
     endOfTomorrow.setHours(23, 59, 59, 999);
     
-    const expiringSoon = await usersCollection.countDocuments({
+    // Build expiring soon query with filter
+    let expiringSoonQuery = {
       status: { $in: ['paid', 'partial', 'unpaid', 'pending'] },
       expiryDate: { 
         $gte: tomorrow.toISOString(), 
@@ -1377,7 +1450,15 @@ app.get('/api/dashboard/stats', async (req, res) => {
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
       ]
-    });
+    };
+    if (feeCollector) {
+      expiringSoonQuery.feeCollector = feeCollector.trim();
+    }
+    if (assignTo) {
+      expiringSoonQuery.assignTo = assignTo.trim();
+    }
+    
+    const expiringSoon = await usersCollection.countDocuments(expiringSoonQuery);
     
     // Deactivated users
     const deactivatedUsers = await usersCollection.countDocuments({
@@ -1385,13 +1466,21 @@ app.get('/api/dashboard/stats', async (req, res) => {
     });
     
     // Total income (align with paid-users list: include 'paid' and 'partial' active users)
-    const incomeUsers = await usersCollection.find({
+    let incomeUsersQuery = {
       status: { $in: ['paid', 'partial'] },
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
       ]
-    }).toArray();
+    };
+    if (feeCollector) {
+      incomeUsersQuery.feeCollector = feeCollector.trim();
+    }
+    if (assignTo) {
+      incomeUsersQuery.assignTo = assignTo.trim();
+    }
+    
+    const incomeUsers = await usersCollection.find(incomeUsersQuery).toArray();
     const totalIncome = incomeUsers.reduce((sum, user) => sum + Number(user.paidAmount || user.amount || 0), 0);
     
     // Total expense - combine both transactions and expenses collections
@@ -1418,22 +1507,38 @@ app.get('/api/dashboard/stats', async (req, res) => {
     const allVouchers = await vouchersCollection.find({}).toArray();
     
     // Get unpaid and partial users (same as unpaid-users.tsx)
-    const unpaidUsersList = await usersCollection.find({
+    let unpaidUsersListQuery = {
       status: 'unpaid',
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
       ]
-    }).toArray();
+    };
+    if (feeCollector) {
+      unpaidUsersListQuery.feeCollector = feeCollector.trim();
+    }
+    if (assignTo) {
+      unpaidUsersListQuery.assignTo = assignTo.trim();
+    }
     
-    const partialUsers = await usersCollection.find({
+    const unpaidUsersList = await usersCollection.find(unpaidUsersListQuery).toArray();
+    
+    let partialUsersQuery = {
       status: 'partial',
       remainingAmount: { $gt: 0 },
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
       ]
-    }).toArray();
+    };
+    if (feeCollector) {
+      partialUsersQuery.feeCollector = feeCollector.trim();
+    }
+    if (assignTo) {
+      partialUsersQuery.assignTo = assignTo.trim();
+    }
+    
+    const partialUsers = await usersCollection.find(partialUsersQuery).toArray();
     
     // Calculate outstanding using voucher-based totals (same as unpaid-users.tsx)
     const calculateUserOutstanding = (user) => {
