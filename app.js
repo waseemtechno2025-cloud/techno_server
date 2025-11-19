@@ -506,6 +506,9 @@ app.get('/api/users', async (req, res) => {
     
     // Check if search query is provided
     const searchQuery = req.query.search;
+    const feeCollector = req.query.feeCollector; // Fee collector filter
+    const assignTo = req.query.assignTo; // Technician assignment filter
+    
     let query = {};
     
     if (searchQuery) {
@@ -517,6 +520,18 @@ app.get('/api/users', async (req, res) => {
           { phoneNumber: { $regex: searchQuery, $options: 'i' } }
         ]
       };
+    }
+    
+    // Filter by fee collector if provided
+    if (feeCollector) {
+      query.feeCollector = feeCollector.trim();
+      console.log(`🔍 Filtering by fee collector: ${feeCollector}`);
+    }
+    
+    // Filter by assignTo (technician) if provided
+    if (assignTo) {
+      query.assignTo = assignTo.trim();
+      console.log(`🔍 Filtering by assignTo (technician): ${assignTo}`);
     }
     
     const users = await usersCollection.find(query).sort({ userName: 1 }).toArray();
