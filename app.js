@@ -1481,6 +1481,7 @@ app.get('/api/users/paid', async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const paymentDate = req.query.paymentDate; // YYYY-MM-DD format
+    const feeCollector = req.query.feeCollector; // Fee collector name filter
     
     let userIds = [];
     
@@ -1612,6 +1613,12 @@ app.get('/api/users/paid', async (req, res) => {
       ]
     };
     
+    // Filter by fee collector if provided
+    if (feeCollector) {
+      query.feeCollector = feeCollector.trim();
+      console.log(`🔍 Filtering by fee collector: ${feeCollector}`);
+    }
+    
     // Add user ID filter if we have users with paid months
     if (paymentDate && userIds.length > 0) {
       const objectIds = userIds.map(id => new ObjectId(id));
@@ -1683,6 +1690,7 @@ app.get('/api/users/unpaid', async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const expiryDate = req.query.expiryDate; // YYYY-MM-DD format
     const unpaidDate = req.query.unpaidDate; // YYYY-MM-DD format - date user became unpaid
+    const feeCollector = req.query.feeCollector; // Fee collector name filter
     
     // CRITICAL: Month-level filtering - show users who have AT LEAST ONE unpaid month
     // Check vouchers to find users with unpaid/partial months
@@ -1695,8 +1703,10 @@ app.get('/api/users/unpaid', async (req, res) => {
       const userIdsWithUnpaidMonths = new Set();
       allVouchers.forEach(voucher => {
         if (Array.isArray(voucher.months)) {
+          // CRITICAL: Only include users with TRUE unpaid months (status === 'unpaid')
+          // Exclude partial months - they should only show in Balance tab
           const hasUnpaidMonth = voucher.months.some(m => 
-            m.status === 'unpaid' || (m.status === 'partial' && m.remainingAmount > 0)
+            m.status === 'unpaid' && !m.refundDate && !m.refundedAmount
           );
           if (hasUnpaidMonth && voucher.userId) {
             userIdsWithUnpaidMonths.add(voucher.userId.toString());
@@ -1719,6 +1729,12 @@ app.get('/api/users/unpaid', async (req, res) => {
         }
       ]
     };
+    
+    // Filter by fee collector if provided
+    if (feeCollector) {
+      query.$and.push({ feeCollector: feeCollector.trim() });
+      console.log(`🔍 Filtering by fee collector: ${feeCollector}`);
+    }
     
     // Add filter for users with unpaid months if no date filter
     if (!expiryDate && !unpaidDate && usersWithUnpaidMonths.length > 0) {
@@ -2074,6 +2090,7 @@ app.get('/api/users/expiring-soon', async (req, res) => {
     
     // If specific date is requested, filter by that date
     const dateParam = req.query.date; // YYYY-MM-DD
+    const feeCollector = req.query.feeCollector; // Fee collector name filter
     let targetY, targetM, targetD;
     let filterByDate = false;
     
@@ -2112,6 +2129,12 @@ app.get('/api/users/expiring-soon', async (req, res) => {
     // Only filter by showInExpiringSoon flag when no specific date is requested
     if (!filterByDate) {
       query.showInExpiringSoon = true;
+    }
+    
+    // Filter by fee collector if provided
+    if (feeCollector) {
+      query.feeCollector = feeCollector.trim();
+      console.log(`🔍 Filtering by fee collector: ${feeCollector}`);
     }
     
     const usersAll = await usersCollection.find(query).toArray();
