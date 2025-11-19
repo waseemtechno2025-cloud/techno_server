@@ -1540,26 +1540,64 @@ app.get('/api/users/paid', async (req, res) => {
       }
     }
     
-    // Base query - include both fully paid and partially paid users
-    // Show both fully paid AND partial users
-    // Partial users appear in BOTH tabs:
-    // - Paid tab: shows paid amount
-    // - Unpaid tab: shows remaining amount
+    // CRITICAL: Month-level filtering - show users who have AT LEAST ONE paid month
+    // Check vouchers to find users with paid/partial months
+    let usersWithPaidMonths = [];
+    
+    if (!paymentDate) {
+      // No date filter - check all vouchers for paid months
+      const allVouchers = await vouchersCollection.find({}).toArray();
+      
+      const userIdsWithPaidMonths = new Set();
+      allVouchers.forEach(voucher => {
+        if (Array.isArray(voucher.months)) {
+          const hasPaidMonth = voucher.months.some(m => 
+            m.status === 'paid' || (m.status === 'partial' && m.paidAmount > 0)
+          );
+          if (hasPaidMonth && voucher.userId) {
+            userIdsWithPaidMonths.add(voucher.userId.toString());
+          }
+        }
+      });
+      
+      usersWithPaidMonths = Array.from(userIdsWithPaidMonths);
+      console.log(`📊 Found ${usersWithPaidMonths.length} users with at least one paid month`);
+    }
+    
+    // Base query - include users with paid status OR users with paid months
     let query = {
-      status: { $in: ['paid', 'partial'] },
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
       ]
     };
     
-    // Add user ID filter if recharge date was provided
+    // Add user ID filter if we have users with paid months
     if (paymentDate && userIds.length > 0) {
       const objectIds = userIds.map(id => new ObjectId(id));
       query._id = { $in: objectIds };
       console.log(`🔍 Filtering users with IDs:`, objectIds.map(id => id.toString()));
     } else if (paymentDate && userIds.length === 0) {
-      // No users found for this recharge date
+      // No users found for this payment date
+      return res.status(200).json({
+        success: true,
+        data: [],
+        totalCount: 0,
+        page,
+        limit
+      });
+    } else if (!paymentDate && usersWithPaidMonths.length > 0) {
+      // No date filter - filter by users with paid months
+      const objectIds = usersWithPaidMonths.map(id => {
+        try {
+          return new ObjectId(id);
+        } catch (e) {
+          return id;
+        }
+      });
+      query._id = { $in: objectIds };
+    } else if (!paymentDate && usersWithPaidMonths.length === 0) {
+      // No users with paid months
       return res.status(200).json({
         success: true,
         data: [],
@@ -1606,9 +1644,32 @@ app.get('/api/users/unpaid', async (req, res) => {
     const expiryDate = req.query.expiryDate; // YYYY-MM-DD format
     const unpaidDate = req.query.unpaidDate; // YYYY-MM-DD format - date user became unpaid
     
-    // Base query - Only show unpaid status (exclude pending) and active users
+    // CRITICAL: Month-level filtering - show users who have AT LEAST ONE unpaid month
+    // Check vouchers to find users with unpaid/partial months
+    let usersWithUnpaidMonths = [];
+    
+    if (!expiryDate && !unpaidDate) {
+      // No date filter - check all vouchers for unpaid months
+      const allVouchers = await vouchersCollection.find({}).toArray();
+      
+      const userIdsWithUnpaidMonths = new Set();
+      allVouchers.forEach(voucher => {
+        if (Array.isArray(voucher.months)) {
+          const hasUnpaidMonth = voucher.months.some(m => 
+            m.status === 'unpaid' || (m.status === 'partial' && m.remainingAmount > 0)
+          );
+          if (hasUnpaidMonth && voucher.userId) {
+            userIdsWithUnpaidMonths.add(voucher.userId.toString());
+          }
+        }
+      });
+      
+      usersWithUnpaidMonths = Array.from(userIdsWithUnpaidMonths);
+      console.log(`📊 Found ${usersWithUnpaidMonths.length} users with at least one unpaid month`);
+    }
+    
+    // Base query - active users only
     let query = {
-      status: 'unpaid',
       $and: [
         {
           $or: [
@@ -1618,6 +1679,27 @@ app.get('/api/users/unpaid', async (req, res) => {
         }
       ]
     };
+    
+    // Add filter for users with unpaid months if no date filter
+    if (!expiryDate && !unpaidDate && usersWithUnpaidMonths.length > 0) {
+      const objectIds = usersWithUnpaidMonths.map(id => {
+        try {
+          return new ObjectId(id);
+        } catch (e) {
+          return id;
+        }
+      });
+      query._id = { $in: objectIds };
+    } else if (!expiryDate && !unpaidDate && usersWithUnpaidMonths.length === 0) {
+      // No users with unpaid months
+      return res.status(200).json({
+        success: true,
+        data: [],
+        totalCount: 0,
+        page,
+        limit
+      });
+    }
     
     // If unpaidDate filter is provided, match users who BECAME unpaid on that calendar day
     if (unpaidDate) {
