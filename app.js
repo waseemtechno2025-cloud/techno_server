@@ -1284,18 +1284,19 @@ app.get('/api/dashboard/stats', async (req, res) => {
     // Total users
     const totalUsers = await usersCollection.countDocuments();
     
-    // Paid users (includes both 'paid' and 'partial' status, exclude inactive)
+    // Paid users (ONLY fully paid, not partial - exclude inactive)
+    // Partial users are counted in unpaid
     const paidUsers = await usersCollection.countDocuments({
-      status: { $in: ['paid', 'partial'] },
+      status: 'paid',
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
       ]
     });
     
-    // Unpaid users (exclude inactive)
+    // Unpaid users (includes partial - exclude inactive)
     const unpaidUsers = await usersCollection.countDocuments({
-      status: 'unpaid',
+      status: { $in: ['unpaid', 'partial'] },
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
@@ -1540,8 +1541,10 @@ app.get('/api/users/paid', async (req, res) => {
     }
     
     // Base query - include both fully paid and partially paid users
+    // CRITICAL: Show ONLY fully paid users (status === 'paid'), not partial
+    // Partial users should appear in unpaid-users tab
     let query = {
-      status: { $in: ['paid', 'partial'] },
+      status: 'paid',
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
