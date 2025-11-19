@@ -2553,13 +2553,45 @@ app.post('/api/vouchers', async (req, res) => {
     if (months && Array.isArray(months) && months.length > 0) {
       console.log(`📦 Creating voucher with ${months.length} months array for user ${userName}`);
       
+      // CRITICAL: Sort months by date (FIFO - First In First Out) before storing
+      // This ensures months are always stored in chronological order (earliest first)
+      // Payment distribution should apply to earliest months first (e.g., Oct before Nov)
+      const parseDate = (dateStr) => {
+        if (!dateStr) return new Date(0);
+        if (dateStr instanceof Date) return dateStr;
+        if (typeof dateStr === 'string') {
+          // Try DD-MM-YYYY format first
+          const parts = dateStr.split('-');
+          if (parts.length === 3) {
+            const day = parseInt(parts[0], 10);
+            const month = parseInt(parts[1], 10) - 1;
+            const year = parseInt(parts[2], 10);
+            if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
+              return new Date(year, month, day);
+            }
+          }
+          // Fallback to ISO string parsing
+          const parsed = new Date(dateStr);
+          return isNaN(parsed.getTime()) ? new Date(0) : parsed;
+        }
+        return new Date(0);
+      };
+      
+      const sortedMonths = [...months].sort((a, b) => {
+        const dateA = parseDate(a.date || a.createdAt);
+        const dateB = parseDate(b.date || b.createdAt);
+        return dateA.getTime() - dateB.getTime(); // Ascending: earliest first
+      });
+      
+      console.log(`📅 Months sorted by date (FIFO order):`, sortedMonths.map(m => `${m.month} (${m.date || m.createdAt})`).join(', '));
+      
       // Check if user already has a voucher
       const existingVoucher = await vouchersCollection.findOne({ userId });
       
       if (existingVoucher) {
         // Check if any months being paid have reversed status
         const refundsCollection = db.collection('refunds');
-        const reversedMonthsPaid = months.filter(m => {
+        const reversedMonthsPaid = sortedMonths.filter(m => {
           // Find if this month exists in voucher with reversed status
           const existingMonth = existingVoucher.months?.find(em => em.month === m.month);
           return existingMonth && existingMonth.status === 'reversed' && m.status === 'paid';
@@ -2586,12 +2618,12 @@ app.post('/api/vouchers', async (req, res) => {
           console.log(`✅ Removed reversed months from refunds collection`);
         }
         
-        // Update existing voucher with new months array
+        // Update existing voucher with new months array (in FIFO order)
         const result = await vouchersCollection.updateOne(
           { userId },
           { 
             $set: { 
-              months,
+              months: sortedMonths,
               rechargeDate: rechargeDate || existingVoucher.rechargeDate,
               expiryDate: expiryDate || existingVoucher.expiryDate
             } 
@@ -2604,13 +2636,13 @@ app.post('/api/vouchers', async (req, res) => {
           data: { _id: existingVoucher._id }
         });
       } else {
-        // Create new voucher with months array
+        // Create new voucher with months array (in FIFO order)
         const newVoucher = {
           userId,
           userName,
           rechargeDate: rechargeDate || null,
           expiryDate: expiryDate || null,
-          months,
+          months: sortedMonths,
           createdAt: new Date()
         };
         
@@ -2727,7 +2759,40 @@ app.put('/api/vouchers/:id', async (req, res) => {
     const { months, rechargeDate, expiryDate } = req.body;
     const updateFields = {};
 
-    if (Array.isArray(months)) updateFields.months = months;
+    if (Array.isArray(months)) {
+      // CRITICAL: Sort months by date (FIFO - First In First Out) before storing
+      // This ensures months are always stored in chronological order (earliest first)
+      // Payment distribution should apply to earliest months first (e.g., Oct before Nov)
+      const parseDate = (dateStr) => {
+        if (!dateStr) return new Date(0);
+        if (dateStr instanceof Date) return dateStr;
+        if (typeof dateStr === 'string') {
+          // Try DD-MM-YYYY format first
+          const parts = dateStr.split('-');
+          if (parts.length === 3) {
+            const day = parseInt(parts[0], 10);
+            const month = parseInt(parts[1], 10) - 1;
+            const year = parseInt(parts[2], 10);
+            if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
+              return new Date(year, month, day);
+            }
+          }
+          // Fallback to ISO string parsing
+          const parsed = new Date(dateStr);
+          return isNaN(parsed.getTime()) ? new Date(0) : parsed;
+        }
+        return new Date(0);
+      };
+      
+      const sortedMonths = [...months].sort((a, b) => {
+        const dateA = parseDate(a.date || a.createdAt);
+        const dateB = parseDate(b.date || b.createdAt);
+        return dateA.getTime() - dateB.getTime(); // Ascending: earliest first
+      });
+      
+      console.log(`📅 Backend PUT: Months sorted by date (FIFO order):`, sortedMonths.map(m => `${m.month} (${m.date || m.createdAt})`).join(', '));
+      updateFields.months = sortedMonths;
+    }
     if (rechargeDate !== undefined) updateFields.rechargeDate = rechargeDate || null;
     if (expiryDate !== undefined) updateFields.expiryDate = expiryDate || null;
     updateFields.updatedAt = new Date();
@@ -4101,6 +4166,40 @@ app.put('/api/vouchers/:id', ensureDbConnection, async (req, res) => {
     
     // Remove isRefund flag before updating voucher
     delete updateData.isRefund;
+    
+    // CRITICAL: Sort months by date (FIFO - First In First Out) before storing
+    // This ensures months are always stored in chronological order (earliest first)
+    if (updateData.months && Array.isArray(updateData.months)) {
+      const parseDate = (dateStr) => {
+        if (!dateStr) return new Date(0);
+        if (dateStr instanceof Date) return dateStr;
+        if (typeof dateStr === 'string') {
+          // Try DD-MM-YYYY format first
+          const parts = dateStr.split('-');
+          if (parts.length === 3) {
+            const day = parseInt(parts[0], 10);
+            const month = parseInt(parts[1], 10) - 1;
+            const year = parseInt(parts[2], 10);
+            if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
+              return new Date(year, month, day);
+            }
+          }
+          // Fallback to ISO string parsing
+          const parsed = new Date(dateStr);
+          return isNaN(parsed.getTime()) ? new Date(0) : parsed;
+        }
+        return new Date(0);
+      };
+      
+      const sortedMonths = [...updateData.months].sort((a, b) => {
+        const dateA = parseDate(a.date || a.createdAt);
+        const dateB = parseDate(b.date || b.createdAt);
+        return dateA.getTime() - dateB.getTime(); // Ascending: earliest first
+      });
+      
+      console.log(`📅 Backend PUT (with refund): Months sorted by date (FIFO order):`, sortedMonths.map(m => `${m.month} (${m.date || m.createdAt})`).join(', '));
+      updateData.months = sortedMonths;
+    }
     
     const result = await vouchersCollection.updateOne(
       { _id: new ObjectId(req.params.id) },
