@@ -5063,5 +5063,148 @@ app.post('/api/admin/cleanup-expiring-flags', ensureDbConnection, async (req, re
   }
 });
 
+// ============ COLLECTIONS TRANSFER ROUTES ============
+
+// POST transfer money from fee collector
+app.post('/api/collections/transfer', ensureDbConnection, async (req, res) => {
+  try {
+    const { feeCollector, amount, message } = req.body;
+    
+    if (!feeCollector || !amount) {
+      return res.status(400).json({
+        success: false,
+        message: 'Fee collector name and amount are required'
+      });
+    }
+    
+    const transferAmount = Number(amount);
+    if (isNaN(transferAmount) || transferAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid amount'
+      });
+    }
+    
+    // Create or get collections collection
+    let collectionsCollection = db.collection('collections');
+    
+    // Check if collection exists, if not create it
+    const collections = await db.listCollections().toArray();
+    const collectionExists = collections.some(c => c.name === 'collections');
+    if (!collectionExists) {
+      await db.createCollection('collections');
+      collectionsCollection = db.collection('collections');
+    }
+    
+    // Create transfer record
+    const transferRecord = {
+      feeCollector: feeCollector.trim(),
+      amount: transferAmount,
+      message: message ? message.trim() : '',
+      date: new Date(),
+      createdAt: new Date()
+    };
+    
+    const result = await collectionsCollection.insertOne(transferRecord);
+    
+    console.log(`💰 Transfer recorded: ${feeCollector} transferred Rs ${transferAmount}`);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Money transferred successfully',
+      data: {
+        _id: result.insertedId,
+        ...transferRecord
+      }
+    });
+  } catch (error) {
+    console.error('Error transferring money:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error transferring money',
+      error: error.message
+    });
+  }
+});
+
+// GET transferred amount for a specific fee collector
+app.get('/api/collections/transferred', ensureDbConnection, async (req, res) => {
+  try {
+    const feeCollector = req.query.feeCollector;
+    
+    if (!feeCollector) {
+      return res.status(400).json({
+        success: false,
+        message: 'Fee collector name is required'
+      });
+    }
+    
+    const collectionsCollection = db.collection('collections');
+    
+    // Calculate total transferred amount for this fee collector
+    const transfers = await collectionsCollection.find({
+      feeCollector: { $regex: new RegExp(`^${feeCollector.trim()}$`, 'i') }
+    }).toArray();
+    
+    const totalTransferred = transfers.reduce((sum, transfer) => sum + Number(transfer.amount || 0), 0);
+    
+    res.status(200).json({
+      success: true,
+      data: {
+        feeCollector: feeCollector.trim(),
+        transferredAmount: totalTransferred,
+        transferCount: transfers.length
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching transferred amount:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching transferred amount',
+      error: error.message
+    });
+  }
+});
+
+// GET all transferred amounts (for admin)
+app.get('/api/collections/transferred/all', ensureDbConnection, async (req, res) => {
+  try {
+    const collectionsCollection = db.collection('collections');
+    
+    // Get all transfers
+    const transfers = await collectionsCollection.find({}).toArray();
+    
+    // Group by fee collector and sum amounts
+    const transferredMap = {};
+    transfers.forEach((transfer) => {
+      const fc = transfer.feeCollector?.trim() || '';
+      if (fc) {
+        if (!transferredMap[fc]) {
+          transferredMap[fc] = 0;
+        }
+        transferredMap[fc] += Number(transfer.amount || 0);
+      }
+    });
+    
+    // Convert to array format
+    const result = Object.entries(transferredMap).map(([feeCollector, transferredAmount]) => ({
+      feeCollector,
+      transferredAmount
+    }));
+    
+    res.status(200).json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    console.error('Error fetching all transferred amounts:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching transferred amounts',
+      error: error.message
+    });
+  }
+});
+
 // Export for Vercel serverless
 module.exports = app;
