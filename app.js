@@ -522,18 +522,22 @@ app.get('/api/users', async (req, res) => {
       };
     }
     
-    // Filter by fee collector if provided (case-insensitive)
+    // STRICT: Filter by fee collector if provided (case-insensitive) - ALWAYS apply
     if (feeCollector) {
       const feeCollectorTrimmed = feeCollector.trim();
-      query.feeCollector = { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') };
-      console.log(`🔍 Filtering /api/users by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
+      if (feeCollectorTrimmed) {
+        query.feeCollector = { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') };
+        console.log(`🔒 STRICT: Filtering /api/users by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
+      }
     }
     
-    // Filter by assignTo (technician) if provided (case-insensitive)
+    // STRICT: Filter by assignTo (technician) if provided (case-insensitive) - ALWAYS apply
     if (assignTo) {
       const assignToTrimmed = assignTo.trim();
-      query.assignTo = { $regex: new RegExp(`^${assignToTrimmed}$`, 'i') };
-      console.log(`🔍 Filtering /api/users by assignTo (technician, case-insensitive): ${assignToTrimmed}`);
+      if (assignToTrimmed) {
+        query.assignTo = { $regex: new RegExp(`^${assignToTrimmed}$`, 'i') };
+        console.log(`🔒 STRICT: Filtering /api/users by assignTo (technician, case-insensitive): ${assignToTrimmed}`);
+      }
     }
     
     const users = await usersCollection.find(query).sort({ userName: 1 }).toArray();
@@ -1606,6 +1610,7 @@ app.get('/api/users/paid', async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const paymentDate = req.query.paymentDate; // YYYY-MM-DD format
     const feeCollector = req.query.feeCollector; // Fee collector name filter
+    const assignTo = req.query.assignTo; // Technician assignment filter
     
     let userIds = [];
     
@@ -1737,11 +1742,22 @@ app.get('/api/users/paid', async (req, res) => {
       ]
     };
     
-    // Filter by fee collector if provided (case-insensitive)
+    // STRICT: Filter by fee collector if provided (case-insensitive) - ALWAYS apply
     if (feeCollector) {
       const feeCollectorTrimmed = feeCollector.trim();
-      query.feeCollector = { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') };
-      console.log(`🔍 Filtering /api/users/paid by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
+      if (feeCollectorTrimmed) {
+        query.feeCollector = { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') };
+        console.log(`🔒 STRICT: Filtering /api/users/paid by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
+      }
+    }
+    
+    // STRICT: Filter by assignTo (technician) if provided (case-insensitive) - ALWAYS apply
+    if (assignTo) {
+      const assignToTrimmed = assignTo.trim();
+      if (assignToTrimmed) {
+        query.assignTo = { $regex: new RegExp(`^${assignToTrimmed}$`, 'i') };
+        console.log(`🔒 STRICT: Filtering /api/users/paid by assignTo (technician, case-insensitive): ${assignToTrimmed}`);
+      }
     }
     
     // Add user ID filter if we have users with paid months
@@ -1816,6 +1832,7 @@ app.get('/api/users/unpaid', async (req, res) => {
     const expiryDate = req.query.expiryDate; // YYYY-MM-DD format
     const unpaidDate = req.query.unpaidDate; // YYYY-MM-DD format - date user became unpaid
     const feeCollector = req.query.feeCollector; // Fee collector name filter
+    const assignTo = req.query.assignTo; // Technician assignment filter
     
     // CRITICAL: Month-level filtering - show users who have AT LEAST ONE unpaid month
     // Check vouchers to find users with unpaid/partial months
@@ -1855,11 +1872,22 @@ app.get('/api/users/unpaid', async (req, res) => {
       ]
     };
     
-    // Filter by fee collector if provided (case-insensitive)
+    // STRICT: Filter by fee collector if provided (case-insensitive) - ALWAYS apply
     if (feeCollector) {
       const feeCollectorTrimmed = feeCollector.trim();
-      query.$and.push({ feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') } });
-      console.log(`🔍 Filtering /api/users/unpaid by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
+      if (feeCollectorTrimmed) {
+        query.$and.push({ feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') } });
+        console.log(`🔒 STRICT: Filtering /api/users/unpaid by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
+      }
+    }
+    
+    // STRICT: Filter by assignTo (technician) if provided (case-insensitive) - ALWAYS apply
+    if (assignTo) {
+      const assignToTrimmed = assignTo.trim();
+      if (assignToTrimmed) {
+        query.$and.push({ assignTo: { $regex: new RegExp(`^${assignToTrimmed}$`, 'i') } });
+        console.log(`🔒 STRICT: Filtering /api/users/unpaid by assignTo (technician, case-insensitive): ${assignToTrimmed}`);
+      }
     }
     
     // Add filter for users with unpaid months if no date filter
@@ -2127,6 +2155,7 @@ app.get('/api/balances', async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const expiryDate = req.query.expiryDate; // YYYY-MM-DD format
     const feeCollector = req.query.feeCollector; // Fee collector name filter
+    const assignTo = req.query.assignTo; // Technician assignment filter
     
     // Base query
     let query = {
@@ -2142,11 +2171,22 @@ app.get('/api/balances', async (req, res) => {
       ]
     };
     
-    // Filter by fee collector if provided (case-insensitive)
+    // STRICT: Filter by fee collector if provided (case-insensitive) - ALWAYS apply
     if (feeCollector) {
       const feeCollectorTrimmed = feeCollector.trim();
-      query.$and.push({ feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') } });
-      console.log(`🔍 Filtering /api/balances by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
+      if (feeCollectorTrimmed) {
+        query.$and.push({ feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') } });
+        console.log(`🔒 STRICT: Filtering /api/balances by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
+      }
+    }
+    
+    // STRICT: Filter by assignTo (technician) if provided (case-insensitive) - ALWAYS apply
+    if (assignTo) {
+      const assignToTrimmed = assignTo.trim();
+      if (assignToTrimmed) {
+        query.$and.push({ assignTo: { $regex: new RegExp(`^${assignToTrimmed}$`, 'i') } });
+        console.log(`🔒 STRICT: Filtering /api/balances by assignTo (technician, case-insensitive): ${assignToTrimmed}`);
+      }
     }
     
     // If expiry date filter is provided, check both vouchers and users collections
