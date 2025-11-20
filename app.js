@@ -5206,5 +5206,51 @@ app.get('/api/collections/transferred/all', ensureDbConnection, async (req, res)
   }
 });
 
+// GET transfer history for a specific fee collector
+app.get('/api/collections/transfers/history', ensureDbConnection, async (req, res) => {
+  console.log('📥 Transfer history endpoint hit. Query:', req.query);
+  try {
+    const feeCollector = req.query.feeCollector;
+    
+    if (!feeCollector) {
+      console.log('❌ Fee collector not provided');
+      return res.status(400).json({
+        success: false,
+        message: 'Fee collector name is required'
+      });
+    }
+    
+    console.log('✅ Fetching transfer history for:', feeCollector);
+    
+    const collectionsCollection = db.collection('collections');
+    
+    // Get all transfers for this fee collector, sorted by date (newest first)
+    const transfers = await collectionsCollection.find({
+      feeCollector: { $regex: new RegExp(`^${feeCollector.trim()}$`, 'i') }
+    }).sort({ date: -1 }).toArray();
+    
+    // Format transfers with date
+    const formattedTransfers = transfers.map((transfer) => ({
+      _id: transfer._id,
+      amount: Number(transfer.amount || 0),
+      message: transfer.message || '',
+      date: transfer.date || transfer.createdAt,
+      createdAt: transfer.createdAt
+    }));
+    
+    res.status(200).json({
+      success: true,
+      data: formattedTransfers
+    });
+  } catch (error) {
+    console.error('Error fetching transfer history:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching transfer history',
+      error: error.message
+    });
+  }
+});
+
 // Export for Vercel serverless
 module.exports = app;
