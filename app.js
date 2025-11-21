@@ -526,7 +526,7 @@ app.get('/api/users', async (req, res) => {
     if (feeCollector) {
       const feeCollectorTrimmed = feeCollector.trim();
       if (feeCollectorTrimmed) {
-        query.feeCollector = { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') };
+      query.feeCollector = { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') };
         console.log(`🔒 STRICT: Filtering /api/users by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
       }
     }
@@ -535,7 +535,7 @@ app.get('/api/users', async (req, res) => {
     if (assignTo) {
       const assignToTrimmed = assignTo.trim();
       if (assignToTrimmed) {
-        query.assignTo = { $regex: new RegExp(`^${assignToTrimmed}$`, 'i') };
+      query.assignTo = { $regex: new RegExp(`^${assignToTrimmed}$`, 'i') };
         console.log(`🔒 STRICT: Filtering /api/users by assignTo (technician, case-insensitive): ${assignToTrimmed}`);
       }
     }
@@ -1746,7 +1746,7 @@ app.get('/api/users/paid', async (req, res) => {
     if (feeCollector) {
       const feeCollectorTrimmed = feeCollector.trim();
       if (feeCollectorTrimmed) {
-        query.feeCollector = { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') };
+      query.feeCollector = { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') };
         console.log(`🔒 STRICT: Filtering /api/users/paid by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
       }
     }
@@ -1876,7 +1876,7 @@ app.get('/api/users/unpaid', async (req, res) => {
     if (feeCollector) {
       const feeCollectorTrimmed = feeCollector.trim();
       if (feeCollectorTrimmed) {
-        query.$and.push({ feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') } });
+      query.$and.push({ feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') } });
         console.log(`🔒 STRICT: Filtering /api/users/unpaid by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
       }
     }
@@ -2175,7 +2175,7 @@ app.get('/api/balances', async (req, res) => {
     if (feeCollector) {
       const feeCollectorTrimmed = feeCollector.trim();
       if (feeCollectorTrimmed) {
-        query.$and.push({ feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') } });
+      query.$and.push({ feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') } });
         console.log(`🔒 STRICT: Filtering /api/balances by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
       }
     }
@@ -2498,6 +2498,55 @@ app.get('/api/expense', ensureDbConnection, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error fetching expenses',
+      error: error.message
+    });
+  }
+});
+
+// GET expenses by date range
+app.get('/api/expense/by-date-range', ensureDbConnection, async (req, res) => {
+  try {
+    const { fromDate, toDate } = req.query;
+    
+    if (!fromDate || !toDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'fromDate and toDate are required (format: YYYY-MM-DD)'
+      });
+    }
+    
+    const expensesCollection = db.collection('expenses');
+    
+    // Parse dates and set time to start/end of day for proper range filtering
+    const from = new Date(fromDate);
+    from.setHours(0, 0, 0, 0);
+    
+    const to = new Date(toDate);
+    to.setHours(23, 59, 59, 999);
+    
+    console.log(`📅 Fetching expenses from ${fromDate} to ${toDate}`);
+    
+    const expenses = await expensesCollection.find({
+      date: {
+        $gte: from,
+        $lte: to
+      }
+    }).sort({ date: -1 }).toArray();
+    
+    // Calculate total expense
+    const totalExpense = expenses.reduce((sum, expense) => sum + (expense.amount || 0), 0);
+    
+    res.status(200).json({
+      success: true,
+      count: expenses.length,
+      totalExpense: totalExpense,
+      data: expenses
+    });
+  } catch (error) {
+    console.error('Error fetching expenses by date range:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching expenses by date range',
       error: error.message
     });
   }
