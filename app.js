@@ -948,7 +948,7 @@ app.delete('/api/packages/:id', async (req, res) => {
 // POST route to add an employee
 app.post('/api/employees/add', async (req, res) => {
   try {
-    const { name, number, role, salary, username, password, isActive } = req.body;
+    const { name, number, role, salary, username, password, isActive, assignedCustomers } = req.body;
 
     if (!name || !number || !role || salary === undefined || !username || !password) {
       return res.status(400).json({
@@ -965,16 +965,41 @@ app.post('/api/employees/add', async (req, res) => {
       username: username.trim(),
       password: password.trim(),
       isActive: isActive !== undefined ? isActive : true,
+      assignedCustomers: assignedCustomers && Array.isArray(assignedCustomers) ? assignedCustomers : [],
       createdAt: new Date()
     };
 
     const result = await employeesCollection.insertOne(employee);
+    const employeeId = result.insertedId;
+    
+    // Update assigned customers in users collection
+    if (assignedCustomers && Array.isArray(assignedCustomers) && assignedCustomers.length > 0) {
+      const employeeName = name.trim();
+      const roleLower = role.trim().toLowerCase();
+      
+      // Update customers based on employee role
+      if (roleLower === 'fee collector') {
+        // Set feeCollector field for assigned customers
+        await usersCollection.updateMany(
+          { _id: { $in: assignedCustomers.map(id => new ObjectId(id)) } },
+          { $set: { feeCollector: employeeName } }
+        );
+        console.log(`✅ Assigned ${assignedCustomers.length} customers to fee collector: ${employeeName}`);
+      } else if (roleLower === 'technician') {
+        // Set assignTo field for assigned customers
+        await usersCollection.updateMany(
+          { _id: { $in: assignedCustomers.map(id => new ObjectId(id)) } },
+          { $set: { assignTo: employeeName } }
+        );
+        console.log(`✅ Assigned ${assignedCustomers.length} customers to technician: ${employeeName}`);
+      }
+    }
     
     res.status(201).json({
       success: true,
       message: 'Employee added successfully',
       data: {
-        _id: result.insertedId,
+        _id: employeeId,
         ...employee
       }
     });
@@ -1010,7 +1035,7 @@ app.get('/api/employees', async (req, res) => {
 // PUT route to update an employee
 app.put('/api/employees/:id', async (req, res) => {
   try {
-    const { name, number, role, salary, username, password, isActive } = req.body;
+    const { name, number, role, salary, username, password, isActive, assignedCustomers } = req.body;
 
     if (!name || !number || !role || salary === undefined || !username || !password) {
       return res.status(400).json({
@@ -1019,17 +1044,33 @@ app.put('/api/employees/:id', async (req, res) => {
       });
     }
 
+    // Get existing employee to check previous assignments
+    const existingEmployee = await employeesCollection.findOne({ _id: new ObjectId(req.params.id) });
+    if (!existingEmployee) {
+      return res.status(404).json({
+        success: false,
+        message: 'Employee not found'
+      });
+    }
+
+    const employeeName = name.trim();
+    const roleLower = role.trim().toLowerCase();
+    const previousAssignedCustomers = existingEmployee.assignedCustomers || [];
+    const newAssignedCustomers = assignedCustomers && Array.isArray(assignedCustomers) ? assignedCustomers : [];
+
+    // Update employee document
     const result = await employeesCollection.updateOne(
       { _id: new ObjectId(req.params.id) },
       { 
         $set: { 
-          name: name.trim(), 
+          name: employeeName, 
           number: number.trim(), 
           role: role.trim(), 
           salary: parseFloat(salary),
           username: username.trim(),
           password: password.trim(),
-          isActive: isActive !== undefined ? isActive : true
+          isActive: isActive !== undefined ? isActive : true,
+          assignedCustomers: newAssignedCustomers
         } 
       }
     );
@@ -1039,6 +1080,45 @@ app.put('/api/employees/:id', async (req, res) => {
         success: false,
         message: 'Employee not found'
       });
+    }
+
+    // Remove assignments from customers that were unassigned
+    const unassignedCustomers = previousAssignedCustomers.filter(
+      id => !newAssignedCustomers.includes(id)
+    );
+    
+    if (unassignedCustomers.length > 0) {
+      const previousRoleLower = (existingEmployee.role || '').toLowerCase();
+      if (previousRoleLower === 'fee collector') {
+        await usersCollection.updateMany(
+          { _id: { $in: unassignedCustomers.map(id => new ObjectId(id)) } },
+          { $unset: { feeCollector: '' } }
+        );
+      } else if (previousRoleLower === 'technician') {
+        await usersCollection.updateMany(
+          { _id: { $in: unassignedCustomers.map(id => new ObjectId(id)) } },
+          { $unset: { assignTo: '' } }
+        );
+      }
+    }
+
+    // Update newly assigned customers
+    if (newAssignedCustomers.length > 0) {
+      if (roleLower === 'fee collector') {
+        // Set feeCollector field for newly assigned customers
+        await usersCollection.updateMany(
+          { _id: { $in: newAssignedCustomers.map(id => new ObjectId(id)) } },
+          { $set: { feeCollector: employeeName } }
+        );
+        console.log(`✅ Updated ${newAssignedCustomers.length} customers for fee collector: ${employeeName}`);
+      } else if (roleLower === 'technician') {
+        // Set assignTo field for newly assigned customers
+        await usersCollection.updateMany(
+          { _id: { $in: newAssignedCustomers.map(id => new ObjectId(id)) } },
+          { $set: { assignTo: employeeName } }
+        );
+        console.log(`✅ Updated ${newAssignedCustomers.length} customers for technician: ${employeeName}`);
+      }
     }
 
     res.status(200).json({
