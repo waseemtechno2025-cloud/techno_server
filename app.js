@@ -5386,7 +5386,7 @@ app.get('/api/collections/transfers/history', ensureDbConnection, async (req, re
 // POST - Create a new complaint
 app.post('/api/complaints', ensureDbConnection, async (req, res) => {
   try {
-    const { userId, userName, message, assignTo, simNo, whatsappNo } = req.body;
+    const { userId, userName, message, assignTo, simNo, whatsappNo, reportedBy } = req.body;
     
     if (!userId || !userName || !message || !message.trim()) {
       return res.status(400).json({
@@ -5414,6 +5414,7 @@ app.post('/api/complaints', ensureDbConnection, async (req, res) => {
       assignTo: assignTo ? assignTo.trim() : null,
       simNo: simNo || null,
       whatsappNo: whatsappNo || null,
+      reportedBy: reportedBy ? reportedBy.trim() : null, // Who reported: admin or fee collector name
       status: 'pending', // pending, resolved
       createdAt: new Date(),
       updatedAt: new Date()
@@ -5441,11 +5442,13 @@ app.post('/api/complaints', ensureDbConnection, async (req, res) => {
   }
 });
 
-// GET - Get all complaints (with optional technician filter)
+// GET - Get all complaints (with optional filters)
 app.get('/api/complaints', ensureDbConnection, async (req, res) => {
   try {
     const technician = req.query.technician; // Filter by assigned technician
     const status = req.query.status; // Filter by status (pending, resolved)
+    const reportedBy = req.query.reportedBy; // Filter by who reported (fee collector name)
+    const role = req.query.role; // User role: admin, fee collector, technician
     
     const complaintsCollection = db.collection('complaints');
     
@@ -5457,6 +5460,12 @@ app.get('/api/complaints', ensureDbConnection, async (req, res) => {
     if (status) {
       query.status = status.toLowerCase();
     }
+    // For fee collector: show only complaints they reported
+    if (role === 'fee collector' && reportedBy) {
+      query.reportedBy = { $regex: new RegExp(`^${reportedBy.trim()}$`, 'i') };
+    }
+    // For admin: show all complaints (no reportedBy filter)
+    // For technician: show complaints assigned to them (already handled by technician filter)
     
     // Get all complaints, sorted by date (newest first)
     const complaints = await complaintsCollection.find(query).sort({ createdAt: -1 }).toArray();
@@ -5470,6 +5479,7 @@ app.get('/api/complaints', ensureDbConnection, async (req, res) => {
       assignTo: complaint.assignTo || null,
       simNo: complaint.simNo || null,
       whatsappNo: complaint.whatsappNo || null,
+      reportedBy: complaint.reportedBy || null,
       status: complaint.status || 'pending',
       createdAt: complaint.createdAt,
       updatedAt: complaint.updatedAt || complaint.createdAt
@@ -5587,6 +5597,56 @@ app.put('/api/complaints/:id/status', ensureDbConnection, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error updating complaint status',
+      error: error.message
+    });
+  }
+});
+
+// DELETE - Delete a complaint
+app.delete('/api/complaints/:id', ensureDbConnection, async (req, res) => {
+  try {
+    const complaintId = req.params.id;
+    
+    if (!complaintId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Complaint ID is required'
+      });
+    }
+    
+    // Validate ObjectId format
+    if (!ObjectId.isValid(complaintId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid complaint ID format'
+      });
+    }
+    
+    const complaintsCollection = db.collection('complaints');
+    
+    // Delete complaint
+    const result = await complaintsCollection.deleteOne(
+      { _id: new ObjectId(complaintId) }
+    );
+    
+    if (result.deletedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Complaint not found'
+      });
+    }
+    
+    console.log(`🗑️ Complaint ${complaintId} deleted`);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Complaint deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting complaint:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error deleting complaint',
       error: error.message
     });
   }
