@@ -5381,5 +5381,216 @@ app.get('/api/collections/transfers/history', ensureDbConnection, async (req, re
   }
 });
 
+// ==================== COMPLAINTS API ====================
+
+// POST - Create a new complaint
+app.post('/api/complaints', ensureDbConnection, async (req, res) => {
+  try {
+    const { userId, userName, message, assignTo, simNo, whatsappNo } = req.body;
+    
+    if (!userId || !userName || !message || !message.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'User ID, user name, and message are required'
+      });
+    }
+    
+    // Create or get complaints collection
+    let complaintsCollection = db.collection('complaints');
+    
+    // Check if collection exists, if not create it
+    const collections = await db.listCollections().toArray();
+    const collectionExists = collections.some(c => c.name === 'complaints');
+    if (!collectionExists) {
+      await db.createCollection('complaints');
+      complaintsCollection = db.collection('complaints');
+    }
+    
+    // Create complaint record
+    const complaintRecord = {
+      userId: userId,
+      userName: userName.trim(),
+      message: message.trim(),
+      assignTo: assignTo ? assignTo.trim() : null,
+      simNo: simNo || null,
+      whatsappNo: whatsappNo || null,
+      status: 'pending', // pending, resolved
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    const result = await complaintsCollection.insertOne(complaintRecord);
+    
+    console.log(`📝 Complaint created: ${userName} - ${message.substring(0, 50)}...`);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Complaint submitted successfully',
+      data: {
+        _id: result.insertedId,
+        ...complaintRecord
+      }
+    });
+  } catch (error) {
+    console.error('Error creating complaint:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creating complaint',
+      error: error.message
+    });
+  }
+});
+
+// GET - Get all complaints (with optional technician filter)
+app.get('/api/complaints', ensureDbConnection, async (req, res) => {
+  try {
+    const technician = req.query.technician; // Filter by assigned technician
+    const status = req.query.status; // Filter by status (pending, resolved)
+    
+    const complaintsCollection = db.collection('complaints');
+    
+    // Build query
+    const query = {};
+    if (technician) {
+      query.assignTo = { $regex: new RegExp(`^${technician.trim()}$`, 'i') };
+    }
+    if (status) {
+      query.status = status.toLowerCase();
+    }
+    
+    // Get all complaints, sorted by date (newest first)
+    const complaints = await complaintsCollection.find(query).sort({ createdAt: -1 }).toArray();
+    
+    // Format complaints
+    const formattedComplaints = complaints.map((complaint) => ({
+      _id: complaint._id,
+      userId: complaint.userId,
+      userName: complaint.userName || '',
+      message: complaint.message || '',
+      assignTo: complaint.assignTo || null,
+      simNo: complaint.simNo || null,
+      whatsappNo: complaint.whatsappNo || null,
+      status: complaint.status || 'pending',
+      createdAt: complaint.createdAt,
+      updatedAt: complaint.updatedAt || complaint.createdAt
+    }));
+    
+    res.status(200).json({
+      success: true,
+      data: formattedComplaints,
+      count: formattedComplaints.length
+    });
+  } catch (error) {
+    console.error('Error fetching complaints:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching complaints',
+      error: error.message
+    });
+  }
+});
+
+// GET - Get complaint statistics for a technician
+app.get('/api/complaints/stats', ensureDbConnection, async (req, res) => {
+  try {
+    const technician = req.query.technician;
+    
+    if (!technician) {
+      return res.status(400).json({
+        success: false,
+        message: 'Technician name is required'
+      });
+    }
+    
+    const complaintsCollection = db.collection('complaints');
+    
+    // Get all complaints for this technician
+    const complaints = await complaintsCollection.find({
+      assignTo: { $regex: new RegExp(`^${technician.trim()}$`, 'i') }
+    }).toArray();
+    
+    // Calculate stats
+    const pending = complaints.filter(c => (c.status || 'pending').toLowerCase() === 'pending').length;
+    const resolved = complaints.filter(c => (c.status || 'pending').toLowerCase() === 'resolved').length;
+    const total = complaints.length;
+    
+    res.status(200).json({
+      success: true,
+      data: {
+        total,
+        pending,
+        resolved
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching complaint stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching complaint statistics',
+      error: error.message
+    });
+  }
+});
+
+// PUT - Update complaint status
+app.put('/api/complaints/:id/status', ensureDbConnection, async (req, res) => {
+  try {
+    const complaintId = req.params.id;
+    const { status } = req.body;
+    
+    if (!complaintId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Complaint ID is required'
+      });
+    }
+    
+    if (!status || !['pending', 'resolved'].includes(status.toLowerCase())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Status must be either "pending" or "resolved"'
+      });
+    }
+    
+    const complaintsCollection = db.collection('complaints');
+    
+    // Update complaint status
+    const result = await complaintsCollection.updateOne(
+      { _id: new ObjectId(complaintId) },
+      {
+        $set: {
+          status: status.toLowerCase(),
+          updatedAt: new Date()
+        }
+      }
+    );
+    
+    if (result.matchedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Complaint not found'
+      });
+    }
+    
+    console.log(`✅ Complaint ${complaintId} status updated to ${status}`);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Complaint status updated successfully',
+      data: {
+        _id: complaintId,
+        status: status.toLowerCase()
+      }
+    });
+  } catch (error) {
+    console.error('Error updating complaint status:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error updating complaint status',
+      error: error.message
+    });
+  }
+});
+
 // Export for Vercel serverless
 module.exports = app;
