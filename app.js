@@ -1475,6 +1475,8 @@ app.get('/api/dashboard/stats', async (req, res) => {
         feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') }
       }).project({ _id: 1 }).toArray();
       const relevantUserIds = new Set(matchingUsers.map(u => u._id.toString()));
+      // Store this for later use in unpaid users query
+      filteredUserIds = Array.from(relevantUserIds);
       vouchersForStats = vouchersForStats.filter(v => 
         v.userId && relevantUserIds.has(v.userId.toString())
       );
@@ -1571,10 +1573,22 @@ app.get('/api/dashboard/stats', async (req, res) => {
     const paidUsers = paidUserIds.length > 0 ? await usersCollection.countDocuments(paidUsersQuery) : 0;
     
     // Count unpaid users (users with at least one unpaid month) - exclude inactive
-    // CRITICAL: For fee collector, we should NOT add user.feeCollector filter here
-    // Because we already filtered vouchers by checking if users match feeCollector/assignTo
-    // The unpaidUserIds are already filtered by the pre-filtering step above
-    const unpaidUserIds = Array.from(userIdsWithUnpaidMonths).map(id => {
+    // CRITICAL: For fee collector, we already pre-filtered vouchers by user.feeCollector
+    // So unpaidUserIds should already be filtered, but we need to verify they match feeCollector
+    const unpaidUserIdsArray = Array.from(userIdsWithUnpaidMonths);
+    
+    // CRITICAL: For fee collector, ensure unpaidUserIds only includes users that match feeCollector
+    // Even though we pre-filtered vouchers, double-check by filtering unpaidUserIds
+    let finalUnpaidUserIds = unpaidUserIdsArray;
+    if (feeCollector && filteredUserIds && filteredUserIds.length > 0) {
+      // Filter unpaidUserIds to only include users that match feeCollector
+      finalUnpaidUserIds = unpaidUserIdsArray.filter(id => 
+        filteredUserIds.includes(id.toString())
+      );
+      console.log(`🔒 Filtered unpaidUserIds by feeCollector: ${unpaidUserIdsArray.length} → ${finalUnpaidUserIds.length}`);
+    }
+    
+    const unpaidUserIds = finalUnpaidUserIds.map(id => {
       try {
         return new ObjectId(id);
       } catch (e) {
@@ -1601,7 +1615,12 @@ app.get('/api/dashboard/stats', async (req, res) => {
     
     const unpaidUsers = unpaidUserIds.length > 0 ? await usersCollection.countDocuments(unpaidUsersQuery) : 0;
     
-    console.log(`📊 Dashboard Stats - Unpaid users: ${unpaidUsers} (from ${unpaidUserIds.length} users with unpaid months${feeCollector ? `, filtered by feeCollector: ${feeCollector.trim()}` : ''}${assignTo ? `, filtered by assignTo: ${assignTo.trim()}` : ''})`);
+    console.log(`📊 Dashboard Stats - Unpaid users calculation:`);
+    console.log(`   - userIdsWithUnpaidMonths (before filtering): ${userIdsWithUnpaidMonths.size}`);
+    console.log(`   - filteredUserIds (feeCollector filter): ${filteredUserIds ? filteredUserIds.length : 'null'}`);
+    console.log(`   - finalUnpaidUserIds (after filtering): ${finalUnpaidUserIds ? finalUnpaidUserIds.length : unpaidUserIds.length}`);
+    console.log(`   - unpaidUserIds (ObjectIds): ${unpaidUserIds.length}`);
+    console.log(`   - Final unpaidUsers count: ${unpaidUsers}${feeCollector ? ` (filtered by feeCollector: ${feeCollector.trim()})` : ''}${assignTo ? ` (filtered by assignTo: ${assignTo.trim()})` : ''}`);
     
     // Expiring soon (TOMORROW) - include paid/partial/unpaid/pending users based on expiry date
     // NOTE: Include unpaid and pending so "Pay Later" and checkbox users also count when expiring tomorrow
