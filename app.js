@@ -1410,6 +1410,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
       // If filter is applied but no users match, return all zeros
       if (filteredUserIds.length === 0) {
         console.log(`⚠️ No users found for filter - returning zero stats`);
+        res.setHeader('Content-Type', 'application/json');
         return res.status(200).json({
           success: true,
           data: {
@@ -1703,6 +1704,17 @@ app.get('/api/dashboard/stats', async (req, res) => {
     const outstanding = Number(unpaidTotal) + Number(partialTotal); // Total from voucher-based calculation
     const balanceCustomers = partialUsers.length;
     
+    console.log(`✅ Dashboard stats calculated:`, {
+      totalUsers,
+      paidUsers,
+      totalIncome,
+      unpaidUsers,
+      outstanding,
+      expiringSoon
+    });
+    
+    // Ensure we always return JSON
+    res.setHeader('Content-Type', 'application/json');
     res.status(200).json({
       success: true,
       data: {
@@ -1719,12 +1731,16 @@ app.get('/api/dashboard/stats', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching dashboard stats:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error fetching dashboard stats',
-      error: error.message
-    });
+    console.error('❌ Error fetching dashboard stats:', error);
+    // Ensure we always return JSON, not HTML
+    if (!res.headersSent) {
+      res.setHeader('Content-Type', 'application/json');
+      res.status(500).json({
+        success: false,
+        message: 'Error fetching dashboard stats',
+        error: error.message
+      });
+    }
   }
 });
 
