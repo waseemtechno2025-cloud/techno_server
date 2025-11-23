@@ -1581,12 +1581,11 @@ app.get('/api/dashboard/stats', async (req, res) => {
       console.log(`📊 Pre-filtered vouchers by assignTo for unpaid users: ${vouchersForUnpaidStats.length} vouchers`);
     }
     
-    // Now check vouchers for unpaid months (EXACT same logic as unpaid-users endpoint)
-    // CRITICAL: Only count users with TRUE unpaid months (status === 'unpaid')
-    // EXCLUDE partial months completely - they should only show in Balance tab
-    // This matches the unpaid-users endpoint logic exactly
+    // Now check vouchers for unpaid AND partial months
+    // CRITICAL: Count users with EITHER unpaid OR partial months (or both)
+    // This matches what user wants: unpaid + partial = total unpaid count in dashboard
     const userIdsWithUnpaidMonths = new Set();
-    const userIdsWithPartialOnly = new Set(); // Track users with ONLY partial months (for debugging)
+    const userIdsWithPartialMonths = new Set();
     
     vouchersForUnpaidStats.forEach(voucher => {
       if (Array.isArray(voucher.months)) {
@@ -1595,7 +1594,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
           m.status === 'unpaid' && !m.refundDate && !m.refundedAmount
         );
         
-        // Check for partial months (for debugging - to see if any users have only partial)
+        // Check for partial months (with remaining amount > 0)
         const hasPartialMonth = voucher.months.some(m =>
           m.status === 'partial' && !m.refundDate && !m.refundedAmount && (m.remainingAmount || 0) > 0
         );
@@ -1603,34 +1602,24 @@ app.get('/api/dashboard/stats', async (req, res) => {
         if (voucher.userId) {
           const userIdStr = voucher.userId.toString();
           if (hasUnpaidMonth) {
-            // User has at least one unpaid month - include in unpaid count
             userIdsWithUnpaidMonths.add(userIdStr);
-            // Remove from partial-only if it was there (user has both unpaid and partial)
-            userIdsWithPartialOnly.delete(userIdStr);
-          } else if (hasPartialMonth && !userIdsWithUnpaidMonths.has(userIdStr)) {
-            // User has ONLY partial months (no unpaid) - track for debugging
-            userIdsWithPartialOnly.add(userIdStr);
+          }
+          if (hasPartialMonth) {
+            userIdsWithPartialMonths.add(userIdStr);
           }
         }
       }
     });
     
-    // CRITICAL: Ensure users with ONLY partial months are NOT counted in unpaid
-    // (This should already be handled by the logic above, but double-check)
-    userIdsWithPartialOnly.forEach(userId => {
-      if (userIdsWithUnpaidMonths.has(userId)) {
-        console.log(`⚠️ WARNING: User ${userId} has both unpaid and partial months - counting as unpaid (correct)`);
-      } else {
-        console.log(`✅ User ${userId} has ONLY partial months - correctly excluded from unpaid count`);
-      }
-    });
+    // Combine both sets: users with unpaid OR partial months
+    const allUnpaidAndPartialUserIds = new Set([...userIdsWithUnpaidMonths, ...userIdsWithPartialMonths]);
     
-    console.log(`📊 Unpaid users calculation:`);
+    console.log(`📊 Unpaid users calculation (unpaid + partial):`);
     console.log(`   - Users with unpaid months: ${userIdsWithUnpaidMonths.size}`);
-    console.log(`   - Users with ONLY partial months (excluded): ${userIdsWithPartialOnly.size}`);
-    console.log(`   - Final unpaid count: ${userIdsWithUnpaidMonths.size}`);
+    console.log(`   - Users with partial months: ${userIdsWithPartialMonths.size}`);
+    console.log(`   - Total (unpaid + partial): ${allUnpaidAndPartialUserIds.size}`);
     
-    const unpaidUserIdsArray = Array.from(userIdsWithUnpaidMonths);
+    const unpaidUserIdsArray = Array.from(allUnpaidAndPartialUserIds);
     
     // CRITICAL: For fee collector, ensure unpaidUserIds only includes users that match feeCollector
     let finalUnpaidUserIds = unpaidUserIdsArray;
