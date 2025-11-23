@@ -1920,10 +1920,38 @@ app.get('/api/users/unpaid', async (req, res) => {
     
     if (!expiryDate && !unpaidDate) {
       // No date filter - check all vouchers for unpaid months
+      // BUT: First filter users by feeCollector/assignTo if provided, then check their vouchers
+      let userFilterForVouchers = {};
+      if (feeCollector) {
+        const feeCollectorTrimmed = feeCollector.trim();
+        if (feeCollectorTrimmed) {
+          userFilterForVouchers.feeCollector = { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') };
+        }
+      }
+      if (assignTo) {
+        const assignToTrimmed = assignTo.trim();
+        if (assignToTrimmed) {
+          userFilterForVouchers.assignTo = { $regex: new RegExp(`^${assignToTrimmed}$`, 'i') };
+        }
+      }
+      
+      // If we have user filters, get matching user IDs first, then check their vouchers
+      let relevantUserIds = null;
+      if (Object.keys(userFilterForVouchers).length > 0) {
+        const matchingUsers = await usersCollection.find(userFilterForVouchers).project({ _id: 1 }).toArray();
+        relevantUserIds = new Set(matchingUsers.map(u => u._id.toString()));
+        console.log(`🔒 Pre-filtered ${relevantUserIds.size} users by feeCollector/assignTo before checking vouchers`);
+      }
+      
       const allVouchers = await vouchersCollection.find({}).toArray();
       
       const userIdsWithUnpaidMonths = new Set();
       allVouchers.forEach(voucher => {
+        // Skip vouchers for users not matching feeCollector/assignTo filter
+        if (relevantUserIds && voucher.userId && !relevantUserIds.has(voucher.userId.toString())) {
+          return;
+        }
+        
         if (Array.isArray(voucher.months)) {
           // CRITICAL: Only include users with TRUE unpaid months (status === 'unpaid')
           // Exclude partial months - they should only show in Balance tab
@@ -1937,7 +1965,7 @@ app.get('/api/users/unpaid', async (req, res) => {
       });
       
       usersWithUnpaidMonths = Array.from(userIdsWithUnpaidMonths);
-      console.log(`📊 Found ${usersWithUnpaidMonths.length} users with at least one unpaid month`);
+      console.log(`📊 Found ${usersWithUnpaidMonths.length} users with at least one unpaid month (after feeCollector/assignTo filter)`);
     }
     
     // Base query - active users only
@@ -1979,7 +2007,8 @@ app.get('/api/users/unpaid', async (req, res) => {
           return id;
         }
       });
-      query._id = { $in: objectIds };
+      // CRITICAL: Add _id filter to $and array to combine with feeCollector/assignTo filters
+      query.$and.push({ _id: { $in: objectIds } });
     } else if (!expiryDate && !unpaidDate && usersWithUnpaidMonths.length === 0) {
       // No users with unpaid months
       return res.status(200).json({
@@ -2043,7 +2072,8 @@ app.get('/api/users/unpaid', async (req, res) => {
           .map(u => u._id);
 
         if (idsByUnpaidSince.length > 0) {
-          query._id = { $in: idsByUnpaidSince };
+          // CRITICAL: Add _id filter to $and array to combine with feeCollector/assignTo filters
+          query.$and.push({ _id: { $in: idsByUnpaidSince } });
           console.log(`🔍 Unpaid users by unpaidSince=${unpaidDate}: ${idsByUnpaidSince.length}`);
         } else {
           // Fallback for older records: look at voucher months CREATED that day with unpaid status
@@ -2064,7 +2094,8 @@ app.get('/api/users/unpaid', async (req, res) => {
             return res.status(200).json({ success: true, data: [], totalCount: 0, page, limit });
           }
           const objectIds = userIds.map(id => new ObjectId(id));
-          query._id = { $in: objectIds };
+          // CRITICAL: Add _id filter to $and array to combine with feeCollector/assignTo filters
+          query.$and.push({ _id: { $in: objectIds } });
           console.log(`🔍 Unpaid users by vouchers for unpaidDate=${unpaidDate}: ${userIds.length}`);
         }
       } else {
@@ -2141,6 +2172,8 @@ app.get('/api/users/reversed', async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const expiryDate = req.query.expiryDate; // YYYY-MM-DD format
+    const feeCollector = req.query.feeCollector; // Fee collector name filter
+    const assignTo = req.query.assignTo; // Technician assignment filter
     
     console.log('🔄 Fetching reversed (refunded) users from REFUNDS collection...');
     
@@ -2170,16 +2203,48 @@ app.get('/api/users/reversed', async (req, res) => {
     const userIds = [...new Set(allRefunds.map(r => r.userId))];
     console.log(`👥 Unique users with refunds: ${userIds.length}`);
     
-    // Fetch user details with pagination
-    const totalCount = userIds.length;
-    const paginatedUserIds = userIds.slice((page - 1) * limit, page * limit);
+    // Build user query with filters
+    let userQuery = {
+      _id: { $in: userIds.map(id => new ObjectId(id)) },
+      $and: [
+        {
+          $or: [
+            { serviceStatus: { $ne: 'inactive' } },
+            { serviceStatus: { $exists: false } }
+          ]
+        }
+      ]
+    };
+    
+    // STRICT: Filter by fee collector if provided (case-insensitive) - ALWAYS apply
+    if (feeCollector) {
+      const feeCollectorTrimmed = feeCollector.trim();
+      if (feeCollectorTrimmed) {
+        userQuery.$and.push({ feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') } });
+        console.log(`🔒 STRICT: Filtering /api/users/reversed by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
+      }
+    }
+    
+    // STRICT: Filter by assignTo (technician) if provided (case-insensitive) - ALWAYS apply
+    if (assignTo) {
+      const assignToTrimmed = assignTo.trim();
+      if (assignToTrimmed) {
+        userQuery.$and.push({ assignTo: { $regex: new RegExp(`^${assignToTrimmed}$`, 'i') } });
+        console.log(`🔒 STRICT: Filtering /api/users/reversed by assignTo (technician, case-insensitive): ${assignToTrimmed}`);
+      }
+    }
+    
+    // First, get all matching users to calculate totalCount
+    const allMatchingUsers = await usersCollection.find(userQuery).toArray();
+    const totalCount = allMatchingUsers.length;
+    
+    // Then apply pagination
+    const paginatedUserIds = allMatchingUsers
+      .slice((page - 1) * limit, page * limit)
+      .map(u => u._id);
     
     const users = await usersCollection.find({
-      _id: { $in: paginatedUserIds.map(id => new ObjectId(id)) },
-      $or: [
-        { serviceStatus: { $ne: 'inactive' } },
-        { serviceStatus: { $exists: false } }
-      ]
+      _id: { $in: paginatedUserIds }
     }).toArray();
     
     // Add filterType and calculate reversed amount for each user
@@ -5449,6 +5514,7 @@ app.get('/api/complaints', ensureDbConnection, async (req, res) => {
     const status = req.query.status; // Filter by status (pending, resolved)
     const reportedBy = req.query.reportedBy; // Filter by who reported (fee collector name)
     const role = req.query.role; // User role: admin, fee collector, technician
+    const search = req.query.search; // Search by name or phone number
     
     const complaintsCollection = db.collection('complaints');
     
@@ -5468,7 +5534,18 @@ app.get('/api/complaints', ensureDbConnection, async (req, res) => {
     // For technician: show complaints assigned to them (already handled by technician filter)
     
     // Get all complaints, sorted by date (newest first)
-    const complaints = await complaintsCollection.find(query).sort({ createdAt: -1 }).toArray();
+    let complaints = await complaintsCollection.find(query).sort({ createdAt: -1 }).toArray();
+    
+    // Apply search filter if provided (search by userName, simNo, or whatsappNo)
+    if (search && search.trim() !== '') {
+      const searchTerm = search.trim().toLowerCase();
+      complaints = complaints.filter(complaint => {
+        const userName = (complaint.userName || '').toLowerCase();
+        const simNo = (complaint.simNo || '').toLowerCase();
+        const whatsappNo = (complaint.whatsappNo || '').toLowerCase();
+        return userName.includes(searchTerm) || simNo.includes(searchTerm) || whatsappNo.includes(searchTerm);
+      });
+    }
     
     // Format complaints
     const formattedComplaints = complaints.map((complaint) => ({
