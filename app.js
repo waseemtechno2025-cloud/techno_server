@@ -1940,18 +1940,22 @@ app.get('/api/users/paid', async (req, res) => {
       ]
     };
     
-    // CRITICAL: If feeCollector filter is provided and we have usersWithPaidMonths from voucher filtering,
-    // we should use those userIds. The usersWithPaidMonths already contains users filtered by receivedBy in vouchers.
-    
-    // STRICT: Filter by fee collector if provided (case-insensitive) - ALWAYS apply
+    // CRITICAL: If feeCollector filter is provided, ONLY use vouchers with receivedBy match
+    // DO NOT use user.feeCollector as fallback - only show users whose payments were received by this fee collector
     const feeCollectorTrimmed = feeCollector ? feeCollector.trim() : null;
     if (feeCollectorTrimmed) {
-      // If we have usersWithPaidMonths from voucher filtering, those already match receivedBy
-      // So we don't need to check user.feeCollector - just use the userIds from vouchers
+      // STRICT: Only show users whose payments have receivedBy matching feeCollector
+      // If no vouchers found with receivedBy match, return empty (don't use user.feeCollector fallback)
       if (usersWithPaidMonths.length === 0) {
-        // No paid months found with receivedBy match, but still check user.feeCollector as fallback
-        query.$and.push({ feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } });
-        console.log(`🔒 STRICT: Filtering /api/users/paid by user.feeCollector (no vouchers with receivedBy match): ${feeCollectorTrimmed}`);
+        // No paid months found with receivedBy match - return empty result
+        console.log(`⚠️ No users found in vouchers with receivedBy: ${feeCollectorTrimmed} - returning empty result`);
+        return res.status(200).json({
+          success: true,
+          data: [],
+          totalCount: 0,
+          page,
+          limit
+        });
       } else {
         // We already filtered by receivedBy in vouchers, so usersWithPaidMonths are correct
         // No need to add feeCollector filter - we'll filter by _id below using usersWithPaidMonths
@@ -1995,20 +1999,15 @@ app.get('/api/users/paid', async (req, res) => {
       console.log(`🔍 Filtering by users with paid months: ${objectIds.length} users`);
     } else if (!paymentDate && usersWithPaidMonths.length === 0) {
       // No users with paid months from vouchers
-      // BUT: If feeCollector filter is provided, we already added user.feeCollector check above
-      // So don't return early - let the query execute with user.feeCollector filter
-      if (!feeCollectorTrimmed) {
-        // No feeCollector filter and no paid months - return empty
-        return res.status(200).json({
-          success: true,
-          data: [],
-          totalCount: 0,
-          page,
-          limit
-        });
-      }
-      // If feeCollector filter exists, query will use user.feeCollector check (already added above)
-      console.log(`⚠️ No users found in vouchers with receivedBy: ${feeCollectorTrimmed}, falling back to user.feeCollector filter`);
+      // If feeCollector filter is provided, we already returned empty above
+      // So this case is only for when there's no feeCollector filter
+      return res.status(200).json({
+        success: true,
+        data: [],
+        totalCount: 0,
+        page,
+        limit
+      });
     }
     
     const totalCount = await usersCollection.countDocuments(query);
