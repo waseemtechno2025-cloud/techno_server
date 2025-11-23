@@ -1456,8 +1456,9 @@ app.get('/api/dashboard/stats', async (req, res) => {
     const totalUsers = await usersCollection.countDocuments(userFilter);
     
     // CRITICAL: Month-level counting - count users with AT LEAST ONE paid month
-    // IMPORTANT: For fee collector, we should NOT pre-filter vouchers by user.feeCollector
-    // Instead, check receivedBy in vouchers directly (same as paid-users endpoint)
+    // IMPORTANT: For unpaid users, we should pre-filter by user.feeCollector FIRST (same as unpaid-users endpoint)
+    // Then check vouchers for unpaid months
+    // For paid users, we check receivedBy in vouchers directly (same as paid-users endpoint)
     // Only pre-filter for technician (assignTo) since that's a user-level field
     let vouchersForStats = await vouchersCol.find({}).toArray();
     if (assignTo && filteredUserIds && filteredUserIds.length > 0) {
@@ -1467,8 +1468,17 @@ app.get('/api/dashboard/stats', async (req, res) => {
       );
       console.log(`📊 Filtered vouchers by assignTo: ${vouchersForStats.length} vouchers for ${filteredUserIds.length} users`);
     } else if (feeCollector) {
-      // For fee collector, don't pre-filter - check receivedBy in vouchers directly
-      console.log(`📊 Checking all vouchers for receivedBy filter (fee collector: ${feeCollector.trim()})`);
+      // For fee collector unpaid users, pre-filter by user.feeCollector FIRST (same as unpaid-users endpoint)
+      // This ensures consistency with unpaid-users endpoint
+      const feeCollectorTrimmed = feeCollector.trim();
+      const matchingUsers = await usersCollection.find({
+        feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') }
+      }).project({ _id: 1 }).toArray();
+      const relevantUserIds = new Set(matchingUsers.map(u => u._id.toString()));
+      vouchersForStats = vouchersForStats.filter(v => 
+        v.userId && relevantUserIds.has(v.userId.toString())
+      );
+      console.log(`📊 Pre-filtered vouchers by user.feeCollector for unpaid users: ${vouchersForStats.length} vouchers for ${relevantUserIds.size} users`);
     }
     
     const userIdsWithPaidMonths = new Set();
@@ -1505,8 +1515,12 @@ app.get('/api/dashboard/stats', async (req, res) => {
           return true; // No feeCollector filter, include all paid months
         });
         
+        // CRITICAL: For unpaid months, we should check the same way as unpaid-users endpoint
+        // Only include users with TRUE unpaid months (status === 'unpaid')
+        // Exclude partial months - they should only show in Balance tab
+        // This ensures consistency with unpaid-users endpoint
         const hasUnpaidMonth = voucher.months.some(m => 
-          m.status === 'unpaid' || (m.status === 'partial' && m.remainingAmount > 0)
+          m.status === 'unpaid' && !m.refundDate && !m.refundedAmount
         );
         
         if (hasPaidMonth && voucher.userId) {
@@ -1557,6 +1571,9 @@ app.get('/api/dashboard/stats', async (req, res) => {
     const paidUsers = paidUserIds.length > 0 ? await usersCollection.countDocuments(paidUsersQuery) : 0;
     
     // Count unpaid users (users with at least one unpaid month) - exclude inactive
+    // CRITICAL: For fee collector, we should NOT add user.feeCollector filter here
+    // Because we already filtered vouchers by checking if users match feeCollector/assignTo
+    // The unpaidUserIds are already filtered by the pre-filtering step above
     const unpaidUserIds = Array.from(userIdsWithUnpaidMonths).map(id => {
       try {
         return new ObjectId(id);
@@ -1575,14 +1592,16 @@ app.get('/api/dashboard/stats', async (req, res) => {
     if (unpaidUserIds.length > 0) {
       unpaidUsersQuery._id = { $in: unpaidUserIds };
     }
-    if (feeCollector) {
-      unpaidUsersQuery.feeCollector = { $regex: new RegExp(`^${feeCollector.trim()}$`, 'i') };
-    }
-    if (assignTo) {
+    // CRITICAL: For fee collector, we already pre-filtered users by user.feeCollector before checking vouchers
+    // So we don't need to add feeCollector filter here again - it would cause double filtering
+    // Only add assignTo filter if it wasn't already applied in pre-filtering
+    if (assignTo && !filteredUserIds) {
       unpaidUsersQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
     }
     
     const unpaidUsers = unpaidUserIds.length > 0 ? await usersCollection.countDocuments(unpaidUsersQuery) : 0;
+    
+    console.log(`📊 Dashboard Stats - Unpaid users: ${unpaidUsers} (from ${unpaidUserIds.length} users with unpaid months${feeCollector ? `, filtered by feeCollector: ${feeCollector.trim()}` : ''}${assignTo ? `, filtered by assignTo: ${assignTo.trim()}` : ''})`);
     
     // Expiring soon (TOMORROW) - include paid/partial/unpaid/pending users based on expiry date
     // NOTE: Include unpaid and pending so "Pay Later" and checkbox users also count when expiring tomorrow
