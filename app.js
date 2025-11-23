@@ -1588,11 +1588,11 @@ app.get('/api/dashboard/stats', async (req, res) => {
             // Check if month has paid amount and receivedBy matches
             const monthReceivedBy = month.receivedBy || '';
             const paymentHistory = Array.isArray(month.paymentHistory) ? month.paymentHistory : [];
-            const paymentHistoryReceivedBy = paymentHistory.map((p: any) => p.receivedBy || '').filter(Boolean);
+            const paymentHistoryReceivedBy = paymentHistory.map((p) => p.receivedBy || '').filter(Boolean);
             
             const monthMatchesReceivedBy = monthReceivedBy && 
               new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(monthReceivedBy);
-            const historyMatchesReceivedBy = paymentHistoryReceivedBy.some((rb: string) => 
+            const historyMatchesReceivedBy = paymentHistoryReceivedBy.some((rb) => 
               new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(rb)
             );
             
@@ -1600,7 +1600,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
               // If paymentHistory exists, use it (more accurate - individual payments)
               // Otherwise use month.paidAmount
               if (paymentHistory.length > 0) {
-                paymentHistory.forEach((payment: any) => {
+                paymentHistory.forEach((payment) => {
                   const paymentReceivedBy = payment.receivedBy || '';
                   if (paymentReceivedBy && new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(paymentReceivedBy)) {
                     incomeFromVouchers += Number(payment.amount || 0);
@@ -1836,12 +1836,12 @@ app.get('/api/users/paid', async (req, res) => {
             if (feeCollectorTrimmed) {
               const monthReceivedBy = month.receivedBy || '';
               const paymentHistoryReceivedBy = Array.isArray(month.paymentHistory) 
-                ? month.paymentHistory.map((p: any) => p.receivedBy || '').filter(Boolean)
+                ? month.paymentHistory.map((p) => p.receivedBy || '').filter(Boolean)
                 : [];
               
               const monthMatchesReceivedBy = monthReceivedBy && 
                 new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(monthReceivedBy);
-              const historyMatchesReceivedBy = paymentHistoryReceivedBy.some((rb: string) => 
+              const historyMatchesReceivedBy = paymentHistoryReceivedBy.some((rb) => 
                 new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(rb)
               );
               
@@ -1897,13 +1897,13 @@ app.get('/api/users/paid', async (req, res) => {
               const monthReceivedBy = m.receivedBy || '';
               // Also check paymentHistory for receivedBy
               const paymentHistoryReceivedBy = Array.isArray(m.paymentHistory) 
-                ? m.paymentHistory.map((p: any) => p.receivedBy || '').filter(Boolean)
+                ? m.paymentHistory.map((p) => p.receivedBy || '').filter(Boolean)
                 : [];
               
               // Match if receivedBy matches feeCollector (case-insensitive)
               const monthMatches = monthReceivedBy && 
                 new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(monthReceivedBy);
-              const historyMatches = paymentHistoryReceivedBy.some((rb: string) => 
+              const historyMatches = paymentHistoryReceivedBy.some((rb) => 
                 new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(rb)
               );
               
