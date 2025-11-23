@@ -1165,6 +1165,7 @@ app.post('/api/auth/login', async (req, res) => {
     const { username, password, role } = req.body;
 
     if (!username || !password) {
+      res.setHeader('Content-Type', 'application/json');
       return res.status(400).json({
         success: false,
         message: 'Username and password are required'
@@ -1180,6 +1181,7 @@ app.post('/api/auth/login', async (req, res) => {
     });
 
     if (!employee) {
+      res.setHeader('Content-Type', 'application/json');
       return res.status(401).json({
         success: false,
         message: 'Invalid username or password'
@@ -1188,6 +1190,7 @@ app.post('/api/auth/login', async (req, res) => {
 
     // Optional: Validate role if provided
     if (role && employee.role && employee.role.toLowerCase() !== role.toLowerCase()) {
+      res.setHeader('Content-Type', 'application/json');
       return res.status(401).json({
         success: false,
         message: 'Invalid role for this user'
@@ -1196,6 +1199,11 @@ app.post('/api/auth/login', async (req, res) => {
 
     // Return success with employee data (excluding password)
     const { password: _, ...employeeData } = employee;
+    
+    console.log(`✅ Login successful for: ${employeeData.username} (${employeeData.role})`);
+    
+    // Ensure we always return JSON
+    res.setHeader('Content-Type', 'application/json');
     res.status(200).json({
       success: true,
       message: 'Login successful',
@@ -1203,12 +1211,16 @@ app.post('/api/auth/login', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error during login:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error during login',
-      error: error.message
-    });
+    console.error('❌ Error during login:', error);
+    // Ensure we always return JSON, not HTML
+    if (!res.headersSent) {
+      res.setHeader('Content-Type', 'application/json');
+      res.status(500).json({
+        success: false,
+        message: 'Error during login',
+        error: error.message
+      });
+    }
   }
 });
 
