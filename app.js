@@ -107,9 +107,9 @@ async function connectToDatabase() {
 // Middleware to ensure database connection
 async function ensureDbConnection(req, res, next) {
   try {
-    console.log(`[${req.method}] ${req.path} - Connection: ${isConnected}, DB: ${!!db}, Users: ${!!usersCollection}, Expenses: ${!!expensesCollection}`);
+    console.log(`[${req.method}] ${req.path} - Connection: ${isConnected}, DB: ${!!db}, Users: ${!!usersCollection}, Employees: ${!!employeesCollection}`);
     
-    if (!isConnected || !db || !usersCollection || !expensesCollection) {
+    if (!isConnected || !db || !usersCollection || !employeesCollection) {
       console.log('Database not connected or collections missing, connecting now...');
       await connectToDatabase();
       console.log('Database connected successfully in middleware');
@@ -119,15 +119,22 @@ async function ensureDbConnection(req, res, next) {
     if (!usersCollection) {
       throw new Error('Users collection failed to initialize');
     }
+    if (!employeesCollection && req.path.includes('/employees')) {
+      throw new Error('Employees collection failed to initialize');
+    }
     
     next();
   } catch (error) {
     console.error('Database connection error in middleware:', error);
-    res.status(503).json({
-      success: false,
-      message: 'Database connection error',
-      error: error.message
-    });
+    // Ensure we always return JSON, not HTML
+    if (!res.headersSent) {
+      res.setHeader('Content-Type', 'application/json');
+      res.status(503).json({
+        success: false,
+        message: 'Database connection error',
+        error: error.message
+      });
+    }
   }
 }
 
@@ -1014,21 +1021,35 @@ app.post('/api/employees/add', async (req, res) => {
 });
 
 // GET route to fetch all employees
-app.get('/api/employees', async (req, res) => {
+app.get('/api/employees', ensureDbConnection, async (req, res) => {
   try {
+    // Ensure employeesCollection is initialized
+    if (!employeesCollection) {
+      throw new Error('Employees collection not initialized');
+    }
+    
     const employees = await employeesCollection.find().sort({ createdAt: -1 }).toArray();
+    
+    console.log(`✅ Returning ${employees.length} employees`);
+    
+    // Ensure we always return JSON
+    res.setHeader('Content-Type', 'application/json');
     res.status(200).json({
       success: true,
       count: employees.length,
       data: employees
     });
   } catch (error) {
-    console.error('Error fetching employees:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error fetching employees',
-      error: error.message
-    });
+    console.error('❌ Error fetching employees:', error);
+    // Ensure we always return JSON, not HTML
+    if (!res.headersSent) {
+      res.setHeader('Content-Type', 'application/json');
+      res.status(500).json({
+        success: false,
+        message: 'Error fetching employees',
+        error: error.message
+      });
+    }
   }
 });
 
