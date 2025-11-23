@@ -1160,7 +1160,7 @@ app.delete('/api/employees/:id', async (req, res) => {
 });
 
 // POST route to authenticate employee login
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', ensureDbConnection, async (req, res) => {
   try {
     const { username, password, role } = req.body;
 
@@ -1168,6 +1168,16 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Username and password are required'
+      });
+    }
+
+    // Ensure employeesCollection is initialized
+    if (!employeesCollection) {
+      console.error('❌ Employees collection not initialized');
+      return res.status(500).json({
+        success: false,
+        message: 'Database connection error',
+        error: 'Employees collection not initialized'
       });
     }
 
@@ -1203,7 +1213,14 @@ app.post('/api/auth/login', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error during login:', error);
+    console.error('❌ Error during login:', error);
+    console.error('Error stack:', error.stack);
+    console.error('Database connection status:', {
+      isConnected,
+      hasDb: !!db,
+      hasEmployeesCollection: !!employeesCollection
+    });
+    
     res.status(500).json({
       success: false,
       message: 'Error during login',
