@@ -5700,18 +5700,25 @@ app.get('/api/complaints', ensureDbConnection, async (req, res) => {
       updatedAt: complaint.updatedAt || complaint.createdAt
     }));
     
+    console.log(`✅ Returning ${formattedComplaints.length} complaints (role: ${role}, reportedBy: ${reportedBy || 'none'})`);
+    
+    // Ensure we always return JSON
+    res.setHeader('Content-Type', 'application/json');
     res.status(200).json({
       success: true,
       data: formattedComplaints,
       count: formattedComplaints.length
     });
   } catch (error) {
-    console.error('Error fetching complaints:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error fetching complaints',
-      error: error.message
-    });
+    console.error('❌ Error fetching complaints:', error);
+    // Ensure we always return JSON, not HTML
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        message: 'Error fetching complaints',
+        error: error.message
+      });
+    }
   }
 });
 
