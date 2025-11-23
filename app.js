@@ -107,9 +107,9 @@ async function connectToDatabase() {
 // Middleware to ensure database connection
 async function ensureDbConnection(req, res, next) {
   try {
-    console.log(`[${req.method}] ${req.path} - Connection: ${isConnected}, DB: ${!!db}, Users: ${!!usersCollection}, Employees: ${!!employeesCollection}`);
+    console.log(`[${req.method}] ${req.path} - Connection: ${isConnected}, DB: ${!!db}, Users: ${!!usersCollection}, Expenses: ${!!expensesCollection}`);
     
-    if (!isConnected || !db || !usersCollection || !employeesCollection) {
+    if (!isConnected || !db || !usersCollection || !expensesCollection) {
       console.log('Database not connected or collections missing, connecting now...');
       await connectToDatabase();
       console.log('Database connected successfully in middleware');
@@ -119,22 +119,15 @@ async function ensureDbConnection(req, res, next) {
     if (!usersCollection) {
       throw new Error('Users collection failed to initialize');
     }
-    if (!employeesCollection && req.path.includes('/employees')) {
-      throw new Error('Employees collection failed to initialize');
-    }
     
     next();
   } catch (error) {
     console.error('Database connection error in middleware:', error);
-    // Ensure we always return JSON, not HTML
-    if (!res.headersSent) {
-      res.setHeader('Content-Type', 'application/json');
-      res.status(503).json({
-        success: false,
-        message: 'Database connection error',
-        error: error.message
-      });
-    }
+    res.status(503).json({
+      success: false,
+      message: 'Database connection error',
+      error: error.message
+    });
   }
 }
 
@@ -1021,35 +1014,21 @@ app.post('/api/employees/add', async (req, res) => {
 });
 
 // GET route to fetch all employees
-app.get('/api/employees', ensureDbConnection, async (req, res) => {
+app.get('/api/employees', async (req, res) => {
   try {
-    // Ensure employeesCollection is initialized
-    if (!employeesCollection) {
-      throw new Error('Employees collection not initialized');
-    }
-    
     const employees = await employeesCollection.find().sort({ createdAt: -1 }).toArray();
-    
-    console.log(`✅ Returning ${employees.length} employees`);
-    
-    // Ensure we always return JSON
-    res.setHeader('Content-Type', 'application/json');
     res.status(200).json({
       success: true,
       count: employees.length,
       data: employees
     });
   } catch (error) {
-    console.error('❌ Error fetching employees:', error);
-    // Ensure we always return JSON, not HTML
-    if (!res.headersSent) {
-      res.setHeader('Content-Type', 'application/json');
-      res.status(500).json({
-        success: false,
-        message: 'Error fetching employees',
-        error: error.message
-      });
-    }
+    console.error('Error fetching employees:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching employees',
+      error: error.message
+    });
   }
 });
 
@@ -1186,7 +1165,6 @@ app.post('/api/auth/login', async (req, res) => {
     const { username, password, role } = req.body;
 
     if (!username || !password) {
-      res.setHeader('Content-Type', 'application/json');
       return res.status(400).json({
         success: false,
         message: 'Username and password are required'
@@ -1202,7 +1180,6 @@ app.post('/api/auth/login', async (req, res) => {
     });
 
     if (!employee) {
-      res.setHeader('Content-Type', 'application/json');
       return res.status(401).json({
         success: false,
         message: 'Invalid username or password'
@@ -1211,7 +1188,6 @@ app.post('/api/auth/login', async (req, res) => {
 
     // Optional: Validate role if provided
     if (role && employee.role && employee.role.toLowerCase() !== role.toLowerCase()) {
-      res.setHeader('Content-Type', 'application/json');
       return res.status(401).json({
         success: false,
         message: 'Invalid role for this user'
@@ -1220,11 +1196,6 @@ app.post('/api/auth/login', async (req, res) => {
 
     // Return success with employee data (excluding password)
     const { password: _, ...employeeData } = employee;
-    
-    console.log(`✅ Login successful for: ${employeeData.username} (${employeeData.role})`);
-    
-    // Ensure we always return JSON
-    res.setHeader('Content-Type', 'application/json');
     res.status(200).json({
       success: true,
       message: 'Login successful',
@@ -1232,16 +1203,12 @@ app.post('/api/auth/login', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Error during login:', error);
-    // Ensure we always return JSON, not HTML
-    if (!res.headersSent) {
-      res.setHeader('Content-Type', 'application/json');
-      res.status(500).json({
-        success: false,
-        message: 'Error during login',
-        error: error.message
-      });
-    }
+    console.error('Error during login:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error during login',
+      error: error.message
+    });
   }
 });
 
@@ -1443,7 +1410,6 @@ app.get('/api/dashboard/stats', async (req, res) => {
       // If filter is applied but no users match, return all zeros
       if (filteredUserIds.length === 0) {
         console.log(`⚠️ No users found for filter - returning zero stats`);
-        res.setHeader('Content-Type', 'application/json');
         return res.status(200).json({
           success: true,
           data: {
@@ -1737,17 +1703,6 @@ app.get('/api/dashboard/stats', async (req, res) => {
     const outstanding = Number(unpaidTotal) + Number(partialTotal); // Total from voucher-based calculation
     const balanceCustomers = partialUsers.length;
     
-    console.log(`✅ Dashboard stats calculated:`, {
-      totalUsers,
-      paidUsers,
-      totalIncome,
-      unpaidUsers,
-      outstanding,
-      expiringSoon
-    });
-    
-    // Ensure we always return JSON
-    res.setHeader('Content-Type', 'application/json');
     res.status(200).json({
       success: true,
       data: {
@@ -1764,16 +1719,12 @@ app.get('/api/dashboard/stats', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error fetching dashboard stats:', error);
-    // Ensure we always return JSON, not HTML
-    if (!res.headersSent) {
-      res.setHeader('Content-Type', 'application/json');
-      res.status(500).json({
-        success: false,
-        message: 'Error fetching dashboard stats',
-        error: error.message
-      });
-    }
+    console.error('Error fetching dashboard stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching dashboard stats',
+      error: error.message
+    });
   }
 });
 
@@ -5749,25 +5700,18 @@ app.get('/api/complaints', ensureDbConnection, async (req, res) => {
       updatedAt: complaint.updatedAt || complaint.createdAt
     }));
     
-    console.log(`✅ Returning ${formattedComplaints.length} complaints (role: ${role}, reportedBy: ${reportedBy || 'none'})`);
-    
-    // Ensure we always return JSON
-    res.setHeader('Content-Type', 'application/json');
     res.status(200).json({
       success: true,
       data: formattedComplaints,
       count: formattedComplaints.length
     });
   } catch (error) {
-    console.error('❌ Error fetching complaints:', error);
-    // Ensure we always return JSON, not HTML
-    if (!res.headersSent) {
-      res.status(500).json({
-        success: false,
-        message: 'Error fetching complaints',
-        error: error.message
-      });
-    }
+    console.error('Error fetching complaints:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching complaints',
+      error: error.message
+    });
   }
 });
 
