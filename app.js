@@ -1418,15 +1418,19 @@ app.get('/api/dashboard/stats', async (req, res) => {
     }
     
     // Get user IDs that match the filter (for voucher filtering)
+    // CRITICAL: For fee collector, we should NOT pre-filter by user.feeCollector
+    // Instead, check receivedBy in vouchers directly (same as paid-users endpoint)
+    // Only pre-filter for technician (assignTo) since that's a user-level field
     let filteredUserIds = null;
-    if (feeCollector || assignTo) {
+    if (assignTo) {
+      // For technician, pre-filter by assignTo
       const filteredUsers = await usersCollection.find(userFilter).toArray();
       filteredUserIds = filteredUsers.map(u => u._id.toString());
-      console.log(`📊 Found ${filteredUserIds.length} users matching filter`);
+      console.log(`📊 Found ${filteredUserIds.length} users matching assignTo filter`);
       
       // If filter is applied but no users match, return all zeros
       if (filteredUserIds.length === 0) {
-        console.log(`⚠️ No users found for filter - returning zero stats`);
+        console.log(`⚠️ No users found for assignTo filter - returning zero stats`);
         return res.status(200).json({
           success: true,
           data: {
@@ -1443,19 +1447,28 @@ app.get('/api/dashboard/stats', async (req, res) => {
           }
         });
       }
+    } else if (feeCollector) {
+      // For fee collector, don't pre-filter - we'll check receivedBy in vouchers directly
+      console.log(`📊 Fee collector filter: Will check receivedBy in all vouchers (not pre-filtering by user.feeCollector)`);
     }
     
     // Total users (with filter if provided)
     const totalUsers = await usersCollection.countDocuments(userFilter);
     
     // CRITICAL: Month-level counting - count users with AT LEAST ONE paid month
-    // Filter vouchers by user IDs if filter is applied
+    // IMPORTANT: For fee collector, we should NOT pre-filter vouchers by user.feeCollector
+    // Instead, check receivedBy in vouchers directly (same as paid-users endpoint)
+    // Only pre-filter for technician (assignTo) since that's a user-level field
     let vouchersForStats = await vouchersCol.find({}).toArray();
-    if (filteredUserIds && filteredUserIds.length > 0) {
+    if (assignTo && filteredUserIds && filteredUserIds.length > 0) {
+      // For technician, pre-filter by assignTo
       vouchersForStats = vouchersForStats.filter(v => 
         v.userId && filteredUserIds.includes(v.userId.toString())
       );
-      console.log(`📊 Filtered vouchers: ${vouchersForStats.length} vouchers for ${filteredUserIds.length} users`);
+      console.log(`📊 Filtered vouchers by assignTo: ${vouchersForStats.length} vouchers for ${filteredUserIds.length} users`);
+    } else if (feeCollector) {
+      // For fee collector, don't pre-filter - check receivedBy in vouchers directly
+      console.log(`📊 Checking all vouchers for receivedBy filter (fee collector: ${feeCollector.trim()})`);
     }
     
     const userIdsWithPaidMonths = new Set();
