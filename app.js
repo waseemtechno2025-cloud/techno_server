@@ -3230,6 +3230,16 @@ app.post('/api/vouchers', async (req, res) => {
     if (months && Array.isArray(months) && months.length > 0) {
       console.log(`📦 Creating voucher with ${months.length} months array for user ${userName}`);
       
+      // Debug: Log receivedBy for first month
+      if (months[0]) {
+        console.log(`🔍 First month receivedBy check:`, {
+          month: months[0].month,
+          receivedBy: months[0].receivedBy,
+          hasPaymentHistory: !!months[0].paymentHistory,
+          paymentHistoryLength: months[0].paymentHistory?.length || 0
+        });
+      }
+      
       // CRITICAL: Sort months by date (FIFO - First In First Out) before storing
       // This ensures months are always stored in chronological order (earliest first)
       // Payment distribution should apply to earliest months first (e.g., Oct before Nov)
@@ -4775,6 +4785,18 @@ app.get('/api/vouchers/user/:userId', ensureDbConnection, async (req, res) => {
   try {
     const { userId } = req.params;
     const vouchers = await vouchersCollection.find({ userId }).toArray();
+    
+    // Debug: Log receivedBy for first voucher's first month
+    if (vouchers.length > 0 && vouchers[0].months && vouchers[0].months.length > 0) {
+      const firstMonth = vouchers[0].months[0];
+      console.log(`🔍 Voucher API - First month receivedBy:`, {
+        month: firstMonth.month,
+        receivedBy: firstMonth.receivedBy,
+        hasPaymentHistory: !!firstMonth.paymentHistory,
+        paymentHistoryReceivedBy: firstMonth.paymentHistory?.map((p) => p.receivedBy).filter(Boolean) || []
+      });
+    }
+    
     res.status(200).json({
       success: true,
       data: vouchers
