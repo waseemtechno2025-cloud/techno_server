@@ -1456,9 +1456,8 @@ app.get('/api/dashboard/stats', async (req, res) => {
     const totalUsers = await usersCollection.countDocuments(userFilter);
     
     // CRITICAL: Month-level counting - count users with AT LEAST ONE paid month
-    // IMPORTANT: For unpaid users, we should pre-filter by user.feeCollector FIRST (same as unpaid-users endpoint)
-    // Then check vouchers for unpaid months
-    // For paid users, we check receivedBy in vouchers directly (same as paid-users endpoint)
+    // IMPORTANT: For paid users, we check receivedBy in vouchers directly (same as paid-users endpoint)
+    // For unpaid users, we pre-filter by user.feeCollector FIRST (same as unpaid-users endpoint)
     // Only pre-filter for technician (assignTo) since that's a user-level field
     let vouchersForStats = await vouchersCol.find({}).toArray();
     if (assignTo && filteredUserIds && filteredUserIds.length > 0) {
@@ -1468,25 +1467,14 @@ app.get('/api/dashboard/stats', async (req, res) => {
       );
       console.log(`📊 Filtered vouchers by assignTo: ${vouchersForStats.length} vouchers for ${filteredUserIds.length} users`);
     } else if (feeCollector) {
-      // For fee collector unpaid users, pre-filter by user.feeCollector FIRST (same as unpaid-users endpoint)
-      // This ensures consistency with unpaid-users endpoint
-      const feeCollectorTrimmed = feeCollector.trim();
-      const matchingUsers = await usersCollection.find({
-        feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') }
-      }).project({ _id: 1 }).toArray();
-      const relevantUserIds = new Set(matchingUsers.map(u => u._id.toString()));
-      // Store this for later use in unpaid users query
-      filteredUserIds = Array.from(relevantUserIds);
-      vouchersForStats = vouchersForStats.filter(v => 
-        v.userId && relevantUserIds.has(v.userId.toString())
-      );
-      console.log(`📊 Pre-filtered vouchers by user.feeCollector for unpaid users: ${vouchersForStats.length} vouchers for ${relevantUserIds.size} users`);
+      // For fee collector paid users, don't pre-filter - check receivedBy in vouchers directly
+      console.log(`📊 Fee collector filter: Will check receivedBy in all vouchers for paid users (not pre-filtering by user.feeCollector)`);
     }
     
     const userIdsWithPaidMonths = new Set();
-    const userIdsWithUnpaidMonths = new Set();
     const feeCollectorTrimmedForStats = feeCollector ? feeCollector.trim() : null;
     
+    // Process vouchers for PAID months (check receivedBy for fee collectors)
     vouchersForStats.forEach(voucher => {
       if (Array.isArray(voucher.months)) {
         // Check if voucher has paid months
@@ -1517,19 +1505,8 @@ app.get('/api/dashboard/stats', async (req, res) => {
           return true; // No feeCollector filter, include all paid months
         });
         
-        // CRITICAL: For unpaid months, we should check the same way as unpaid-users endpoint
-        // Only include users with TRUE unpaid months (status === 'unpaid')
-        // Exclude partial months - they should only show in Balance tab
-        // This ensures consistency with unpaid-users endpoint
-        const hasUnpaidMonth = voucher.months.some(m => 
-          m.status === 'unpaid' && !m.refundDate && !m.refundedAmount
-        );
-        
         if (hasPaidMonth && voucher.userId) {
           userIdsWithPaidMonths.add(voucher.userId.toString());
-        }
-        if (hasUnpaidMonth && voucher.userId) {
-          userIdsWithUnpaidMonths.add(voucher.userId.toString());
         }
       }
     });
@@ -1573,17 +1550,59 @@ app.get('/api/dashboard/stats', async (req, res) => {
     const paidUsers = paidUserIds.length > 0 ? await usersCollection.countDocuments(paidUsersQuery) : 0;
     
     // Count unpaid users (users with at least one unpaid month) - exclude inactive
-    // CRITICAL: For fee collector, we already pre-filtered vouchers by user.feeCollector
-    // So unpaidUserIds should already be filtered, but we need to verify they match feeCollector
+    // CRITICAL: For fee collector, use EXACT same logic as /api/users/unpaid endpoint
+    // Pre-filter users by user.feeCollector FIRST, then check their vouchers for unpaid months
+    let unpaidUsersFilteredByIds = null;
+    if (feeCollector) {
+      const feeCollectorTrimmed = feeCollector.trim();
+      const matchingUsers = await usersCollection.find({
+        feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') }
+      }).project({ _id: 1 }).toArray();
+      unpaidUsersFilteredByIds = new Set(matchingUsers.map(u => u._id.toString()));
+      console.log(`📊 Pre-filtered users by user.feeCollector for unpaid users: ${unpaidUsersFilteredByIds.size} users`);
+    }
+    
+    // Filter vouchers by these pre-filtered user IDs
+    let vouchersForUnpaidStats = await vouchersCol.find({}).toArray();
+    if (unpaidUsersFilteredByIds && unpaidUsersFilteredByIds.size > 0) {
+      vouchersForUnpaidStats = vouchersForUnpaidStats.filter(v =>
+        v.userId && unpaidUsersFilteredByIds.has(v.userId.toString())
+      );
+      console.log(`📊 Pre-filtered vouchers by user.feeCollector for unpaid users: ${vouchersForUnpaidStats.length} vouchers for ${unpaidUsersFilteredByIds.size} users`);
+    } else if (feeCollector) {
+      // If feeCollector is present but no matching users, then no unpaid users
+      console.log(`⚠️ No users found matching feeCollector for unpaid stats - returning zero`);
+      const unpaidUsers = 0;
+    } else if (assignTo && filteredUserIds && filteredUserIds.length > 0) {
+      // For technician, use pre-filtered vouchers
+      vouchersForUnpaidStats = vouchersForUnpaidStats.filter(v =>
+        v.userId && filteredUserIds.includes(v.userId.toString())
+      );
+      console.log(`📊 Pre-filtered vouchers by assignTo for unpaid users: ${vouchersForUnpaidStats.length} vouchers`);
+    }
+    
+    // Now check vouchers for unpaid months (same logic as unpaid-users endpoint)
+    const userIdsWithUnpaidMonths = new Set();
+    vouchersForUnpaidStats.forEach(voucher => {
+      if (Array.isArray(voucher.months)) {
+        // CRITICAL: Only include users with TRUE unpaid months (status === 'unpaid')
+        // Exclude partial months - they should only show in Balance tab
+        const hasUnpaidMonth = voucher.months.some(m =>
+          m.status === 'unpaid' && !m.refundDate && !m.refundedAmount
+        );
+        if (hasUnpaidMonth && voucher.userId) {
+          userIdsWithUnpaidMonths.add(voucher.userId.toString());
+        }
+      }
+    });
+    
     const unpaidUserIdsArray = Array.from(userIdsWithUnpaidMonths);
     
     // CRITICAL: For fee collector, ensure unpaidUserIds only includes users that match feeCollector
-    // Even though we pre-filtered vouchers, double-check by filtering unpaidUserIds
     let finalUnpaidUserIds = unpaidUserIdsArray;
-    if (feeCollector && filteredUserIds && filteredUserIds.length > 0) {
-      // Filter unpaidUserIds to only include users that match feeCollector
-      finalUnpaidUserIds = unpaidUserIdsArray.filter(id => 
-        filteredUserIds.includes(id.toString())
+    if (feeCollector && unpaidUsersFilteredByIds && unpaidUsersFilteredByIds.size > 0) {
+      finalUnpaidUserIds = unpaidUserIdsArray.filter(id =>
+        unpaidUsersFilteredByIds.has(id.toString())
       );
       console.log(`🔒 Filtered unpaidUserIds by feeCollector: ${unpaidUserIdsArray.length} → ${finalUnpaidUserIds.length}`);
     }
@@ -1606,21 +1625,20 @@ app.get('/api/dashboard/stats', async (req, res) => {
     if (unpaidUserIds.length > 0) {
       unpaidUsersQuery._id = { $in: unpaidUserIds };
     }
-    // CRITICAL: For fee collector, we already pre-filtered users by user.feeCollector before checking vouchers
-    // So we don't need to add feeCollector filter here again - it would cause double filtering
-    // Only add assignTo filter if it wasn't already applied in pre-filtering
-    if (assignTo && !filteredUserIds) {
+    // Removed feeCollector filter here to avoid double filtering, as it's handled by pre-filtering
+    if (assignTo) {
       unpaidUsersQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
     }
     
     const unpaidUsers = unpaidUserIds.length > 0 ? await usersCollection.countDocuments(unpaidUsersQuery) : 0;
     
     console.log(`📊 Dashboard Stats - Unpaid users calculation:`);
-    console.log(`   - userIdsWithUnpaidMonths (before filtering): ${userIdsWithUnpaidMonths.size}`);
-    console.log(`   - filteredUserIds (feeCollector filter): ${filteredUserIds ? filteredUserIds.length : 'null'}`);
-    console.log(`   - finalUnpaidUserIds (after filtering): ${finalUnpaidUserIds ? finalUnpaidUserIds.length : unpaidUserIds.length}`);
-    console.log(`   - unpaidUserIds (ObjectIds): ${unpaidUserIds.length}`);
-    console.log(`   - Final unpaidUsers count: ${unpaidUsers}${feeCollector ? ` (filtered by feeCollector: ${feeCollector.trim()})` : ''}${assignTo ? ` (filtered by assignTo: ${assignTo.trim()})` : ''}`);
+    console.log(`   - initialVouchers: ${await vouchersCol.countDocuments({})}`);
+    console.log(`   - vouchersAfterAssignToFilter: ${assignTo ? vouchersForStats.length : 'N/A'}`);
+    console.log(`   - vouchersAfterFeeCollectorPreFilter: ${feeCollector ? (unpaidUsersFilteredByIds ? vouchersForUnpaidStats.length : 'N/A') : 'N/A'}`);
+    console.log(`   - userIdsWithUnpaidMonthsSize: ${userIdsWithUnpaidMonths.size}`);
+    console.log(`   - finalUnpaidUserIdsLength: ${finalUnpaidUserIds.length}`);
+    console.log(`   - unpaidUsersCount: ${unpaidUsers}${feeCollector ? ` (filtered by feeCollector: ${feeCollector.trim()})` : ''}${assignTo ? ` (filtered by assignTo: ${assignTo.trim()})` : ''}`);
     
     // Expiring soon (TOMORROW) - include paid/partial/unpaid/pending users based on expiry date
     // NOTE: Include unpaid and pending so "Pay Later" and checkbox users also count when expiring tomorrow
@@ -1707,18 +1725,18 @@ app.get('/api/dashboard/stats', async (req, res) => {
       console.log(`💰 Total income from vouchers (receivedBy=${feeCollectorTrimmed}): Rs ${totalIncome}`);
     } else {
       // No feeCollector filter - calculate normally from user documents
-      let incomeUsersQuery = {
-        status: { $in: ['paid', 'partial'] },
-        $or: [
-          { serviceStatus: { $ne: 'inactive' } },
-          { serviceStatus: { $exists: false } }
-        ]
-      };
-      if (assignTo) {
-        incomeUsersQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
-      }
-      
-      const incomeUsers = await usersCollection.find(incomeUsersQuery).toArray();
+    let incomeUsersQuery = {
+      status: { $in: ['paid', 'partial'] },
+      $or: [
+        { serviceStatus: { $ne: 'inactive' } },
+        { serviceStatus: { $exists: false } }
+      ]
+    };
+    if (assignTo) {
+      incomeUsersQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
+    }
+    
+    const incomeUsers = await usersCollection.find(incomeUsersQuery).toArray();
       totalIncome = incomeUsers.reduce((sum, user) => sum + Number(user.paidAmount || user.amount || 0), 0);
     }
     
@@ -2019,10 +2037,10 @@ app.get('/api/users/paid', async (req, res) => {
     let query = {
       $and: [
         {
-          $or: [
-            { serviceStatus: { $ne: 'inactive' } },
-            { serviceStatus: { $exists: false } }
-          ]
+      $or: [
+        { serviceStatus: { $ne: 'inactive' } },
+        { serviceStatus: { $exists: false } }
+      ]
         }
       ]
     };
@@ -2440,10 +2458,10 @@ app.get('/api/users/reversed', async (req, res) => {
       _id: { $in: userIds.map(id => new ObjectId(id)) },
       $and: [
         {
-          $or: [
-            { serviceStatus: { $ne: 'inactive' } },
-            { serviceStatus: { $exists: false } }
-          ]
+      $or: [
+        { serviceStatus: { $ne: 'inactive' } },
+        { serviceStatus: { $exists: false } }
+      ]
         }
       ]
     };
@@ -2686,7 +2704,7 @@ app.get('/api/users/expiring-soon', async (req, res) => {
     if (feeCollector) {
       const feeCollectorTrimmed = feeCollector.trim();
       if (feeCollectorTrimmed) {
-        query.feeCollector = { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') };
+      query.feeCollector = { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') };
         console.log(`🔒 STRICT: Filtering /api/users/expiring-soon by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
       }
     }
