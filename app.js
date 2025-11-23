@@ -1553,23 +1553,70 @@ app.get('/api/dashboard/stats', async (req, res) => {
       status: 'inactive'
     });
     
-    // Total income (align with paid-users list: include 'paid' and 'partial' active users)
-    let incomeUsersQuery = {
-      status: { $in: ['paid', 'partial'] },
-      $or: [
-        { serviceStatus: { $ne: 'inactive' } },
-        { serviceStatus: { $exists: false } }
-      ]
-    };
-    if (feeCollector) {
-      incomeUsersQuery.feeCollector = { $regex: new RegExp(`^${feeCollector.trim()}$`, 'i') };
-    }
-    if (assignTo) {
-      incomeUsersQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
-    }
+    // Total income - CRITICAL: Calculate from vouchers based on receivedBy if feeCollector filter is provided
+    // This ensures income matches what fee collector actually received
+    let totalIncome = 0;
+    const feeCollectorTrimmed = feeCollector ? feeCollector.trim() : null;
     
-    const incomeUsers = await usersCollection.find(incomeUsersQuery).toArray();
-    const totalIncome = incomeUsers.reduce((sum, user) => sum + Number(user.paidAmount || user.amount || 0), 0);
+    if (feeCollectorTrimmed) {
+      // Calculate income from vouchers where receivedBy matches feeCollector
+      console.log(`💰 Calculating income from vouchers with receivedBy: ${feeCollectorTrimmed}`);
+      
+      const allVouchersForIncome = await vouchersCol.find({}).toArray();
+      let incomeFromVouchers = 0;
+      
+      allVouchersForIncome.forEach(voucher => {
+        if (Array.isArray(voucher.months)) {
+          voucher.months.forEach(month => {
+            // Check if month has paid amount and receivedBy matches
+            const monthReceivedBy = month.receivedBy || '';
+            const paymentHistory = Array.isArray(month.paymentHistory) ? month.paymentHistory : [];
+            const paymentHistoryReceivedBy = paymentHistory.map((p: any) => p.receivedBy || '').filter(Boolean);
+            
+            const monthMatchesReceivedBy = monthReceivedBy && 
+              new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(monthReceivedBy);
+            const historyMatchesReceivedBy = paymentHistoryReceivedBy.some((rb: string) => 
+              new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(rb)
+            );
+            
+            if (monthMatchesReceivedBy || historyMatchesReceivedBy) {
+              // If paymentHistory exists, use it (more accurate - individual payments)
+              // Otherwise use month.paidAmount
+              if (paymentHistory.length > 0) {
+                paymentHistory.forEach((payment: any) => {
+                  const paymentReceivedBy = payment.receivedBy || '';
+                  if (paymentReceivedBy && new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(paymentReceivedBy)) {
+                    incomeFromVouchers += Number(payment.amount || 0);
+                  }
+                });
+              } else if (monthMatchesReceivedBy) {
+                // No paymentHistory, but month.receivedBy matches - use month.paidAmount
+                const paidAmt = Number(month.paidAmount || 0);
+                incomeFromVouchers += paidAmt;
+              }
+            }
+          });
+        }
+      });
+      
+      totalIncome = incomeFromVouchers;
+      console.log(`💰 Total income from vouchers (receivedBy=${feeCollectorTrimmed}): Rs ${totalIncome}`);
+    } else {
+      // No feeCollector filter - calculate normally from user documents
+      let incomeUsersQuery = {
+        status: { $in: ['paid', 'partial'] },
+        $or: [
+          { serviceStatus: { $ne: 'inactive' } },
+          { serviceStatus: { $exists: false } }
+        ]
+      };
+      if (assignTo) {
+        incomeUsersQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
+      }
+      
+      const incomeUsers = await usersCollection.find(incomeUsersQuery).toArray();
+      totalIncome = incomeUsers.reduce((sum, user) => sum + Number(user.paidAmount || user.amount || 0), 0);
+    }
     
     // Total expense - combine both transactions and expenses collections
     const expenseResultFromTransactions = await transactionsCollection.aggregate([
@@ -1755,19 +1802,36 @@ app.get('/api/users/paid', async (req, res) => {
         };
 
         const vouchers = await vouchersCollection.find({ 'months.status': { $in: ['paid', 'partial'] } }).toArray();
+        const feeCollectorTrimmed = feeCollector ? feeCollector.trim() : null;
 
         const filteredVouchers = vouchers.filter((voucher) => {
           const months = Array.isArray(voucher.months) ? voucher.months : [];
           const paidOrPartialMonths = months.filter((month) => ['paid', 'partial'].includes(month.status));
 
           const monthMatches = paidOrPartialMonths.some((month) => {
-            if (matchesPaymentDate(month.createdAt) || matchesPaymentDate(month.date)) {
-              return true;
+            // Check date match first
+            const dateMatches = matchesPaymentDate(month.createdAt) || matchesPaymentDate(month.date) ||
+              (Array.isArray(month.paymentHistory) && month.paymentHistory.some((entry) => matchesPaymentDate(entry?.date)));
+            
+            if (!dateMatches) return false;
+            
+            // If feeCollector filter is provided, also check receivedBy
+            if (feeCollectorTrimmed) {
+              const monthReceivedBy = month.receivedBy || '';
+              const paymentHistoryReceivedBy = Array.isArray(month.paymentHistory) 
+                ? month.paymentHistory.map((p: any) => p.receivedBy || '').filter(Boolean)
+                : [];
+              
+              const monthMatchesReceivedBy = monthReceivedBy && 
+                new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(monthReceivedBy);
+              const historyMatchesReceivedBy = paymentHistoryReceivedBy.some((rb: string) => 
+                new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(rb)
+              );
+              
+              return monthMatchesReceivedBy || historyMatchesReceivedBy;
             }
-            if (Array.isArray(month.paymentHistory)) {
-              return month.paymentHistory.some((entry) => matchesPaymentDate(entry?.date));
-            }
-            return false;
+            
+            return true;
           });
 
           if (monthMatches) {
@@ -1778,7 +1842,7 @@ app.get('/api/users/paid', async (req, res) => {
           return topLevelMatch && paidOrPartialMonths.length > 0;
         });
 
-        console.log(`📊 Query result: Found ${filteredVouchers.length} vouchers matching ${paymentDate}`);
+        console.log(`📊 Query result: Found ${filteredVouchers.length} vouchers matching ${paymentDate}${feeCollectorTrimmed ? ` (filtered by receivedBy: ${feeCollectorTrimmed})` : ''}`);
         filteredVouchers.forEach(v => {
           console.log(`  - User: ${v.userName}, voucherCreated: ${v.createdAt}, months: ${(v.months || []).length}`);
         });
@@ -1792,6 +1856,7 @@ app.get('/api/users/paid', async (req, res) => {
     
     // CRITICAL: Month-level filtering - show users who have AT LEAST ONE paid month
     // Check vouchers to find users with paid/partial months
+    // IMPORTANT: If feeCollector filter is provided, also check receivedBy in vouchers
     let usersWithPaidMonths = [];
     
     if (!paymentDate) {
@@ -1799,11 +1864,38 @@ app.get('/api/users/paid', async (req, res) => {
       const allVouchers = await vouchersCollection.find({}).toArray();
       
       const userIdsWithPaidMonths = new Set();
+      const feeCollectorTrimmed = feeCollector ? feeCollector.trim() : null;
+      
       allVouchers.forEach(voucher => {
         if (Array.isArray(voucher.months)) {
-          const hasPaidMonth = voucher.months.some(m => 
-            m.status === 'paid' || (m.status === 'partial' && m.paidAmount > 0)
-          );
+          // Check if voucher has paid months
+          // If feeCollector filter is provided, also check receivedBy
+          const hasPaidMonth = voucher.months.some(m => {
+            const isPaid = m.status === 'paid' || (m.status === 'partial' && m.paidAmount > 0);
+            if (!isPaid) return false;
+            
+            // If feeCollector filter is provided, check receivedBy
+            if (feeCollectorTrimmed) {
+              // Check month-level receivedBy
+              const monthReceivedBy = m.receivedBy || '';
+              // Also check paymentHistory for receivedBy
+              const paymentHistoryReceivedBy = Array.isArray(m.paymentHistory) 
+                ? m.paymentHistory.map((p: any) => p.receivedBy || '').filter(Boolean)
+                : [];
+              
+              // Match if receivedBy matches feeCollector (case-insensitive)
+              const monthMatches = monthReceivedBy && 
+                new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(monthReceivedBy);
+              const historyMatches = paymentHistoryReceivedBy.some((rb: string) => 
+                new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(rb)
+              );
+              
+              return monthMatches || historyMatches;
+            }
+            
+            return true; // No feeCollector filter, include all paid months
+          });
+          
           if (hasPaidMonth && voucher.userId) {
             userIdsWithPaidMonths.add(voucher.userId.toString());
           }
@@ -1811,31 +1903,54 @@ app.get('/api/users/paid', async (req, res) => {
       });
       
       usersWithPaidMonths = Array.from(userIdsWithPaidMonths);
-      console.log(`📊 Found ${usersWithPaidMonths.length} users with at least one paid month`);
+      console.log(`📊 Found ${usersWithPaidMonths.length} users with at least one paid month${feeCollectorTrimmed ? ` (filtered by receivedBy: ${feeCollectorTrimmed})` : ''}`);
     }
     
     // Base query - include users with paid status OR users with paid months
     let query = {
-      $or: [
-        { serviceStatus: { $ne: 'inactive' } },
-        { serviceStatus: { $exists: false } }
+      $and: [
+        {
+          $or: [
+            { serviceStatus: { $ne: 'inactive' } },
+            { serviceStatus: { $exists: false } }
+          ]
+        }
       ]
     };
     
+    // CRITICAL: If feeCollector filter is provided and we have usersWithPaidMonths from voucher filtering,
+    // we should use those userIds. But also check user.feeCollector as a fallback.
+    // The usersWithPaidMonths already contains users filtered by receivedBy in vouchers.
+    
     // STRICT: Filter by fee collector if provided (case-insensitive) - ALWAYS apply
-    if (feeCollector) {
-      const feeCollectorTrimmed = feeCollector.trim();
-      if (feeCollectorTrimmed) {
-      query.feeCollector = { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') };
-        console.log(`🔒 STRICT: Filtering /api/users/paid by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
+    // BUT: If we already filtered by receivedBy in vouchers, we can be more lenient
+    const feeCollectorTrimmed = feeCollector ? feeCollector.trim() : null;
+    if (feeCollectorTrimmed) {
+      // If we have usersWithPaidMonths from voucher filtering, those already match receivedBy
+      // But we should also check user.feeCollector as a secondary filter
+      // Use $or to match either user.feeCollector OR users from vouchers with receivedBy
+      if (usersWithPaidMonths.length > 0) {
+        // We already filtered by receivedBy in vouchers, so usersWithPaidMonths are correct
+        // But also add user.feeCollector check as additional filter
+        query.$and.push({
+          $or: [
+            { feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+            // Users from vouchers with receivedBy are already in usersWithPaidMonths
+            // So we'll filter by _id below
+          ]
+        });
+      } else {
+        // No paid months found, but still check user.feeCollector
+        query.$and.push({ feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } });
       }
+      console.log(`🔒 STRICT: Filtering /api/users/paid by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
     }
     
     // STRICT: Filter by assignTo (technician) if provided (case-insensitive) - ALWAYS apply
     if (assignTo) {
       const assignToTrimmed = assignTo.trim();
       if (assignToTrimmed) {
-        query.assignTo = { $regex: new RegExp(`^${assignToTrimmed}$`, 'i') };
+        query.$and.push({ assignTo: { $regex: new RegExp(`^${assignToTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } });
         console.log(`🔒 STRICT: Filtering /api/users/paid by assignTo (technician, case-insensitive): ${assignToTrimmed}`);
       }
     }
@@ -1843,7 +1958,7 @@ app.get('/api/users/paid', async (req, res) => {
     // Add user ID filter if we have users with paid months
     if (paymentDate && userIds.length > 0) {
       const objectIds = userIds.map(id => new ObjectId(id));
-      query._id = { $in: objectIds };
+      query.$and.push({ _id: { $in: objectIds } });
       console.log(`🔍 Filtering users with IDs:`, objectIds.map(id => id.toString()));
     } else if (paymentDate && userIds.length === 0) {
       // No users found for this payment date
@@ -1855,7 +1970,7 @@ app.get('/api/users/paid', async (req, res) => {
         limit
       });
     } else if (!paymentDate && usersWithPaidMonths.length > 0) {
-      // No date filter - filter by users with paid months
+      // No date filter - filter by users with paid months (already filtered by receivedBy if feeCollector provided)
       const objectIds = usersWithPaidMonths.map(id => {
         try {
           return new ObjectId(id);
@@ -1863,7 +1978,8 @@ app.get('/api/users/paid', async (req, res) => {
           return id;
         }
       });
-      query._id = { $in: objectIds };
+      query.$and.push({ _id: { $in: objectIds } });
+      console.log(`🔍 Filtering by users with paid months: ${objectIds.length} users`);
     } else if (!paymentDate && usersWithPaidMonths.length === 0) {
       // No users with paid months
       return res.status(200).json({
