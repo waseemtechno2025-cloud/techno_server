@@ -2137,6 +2137,10 @@ app.get('/api/users/unpaid', async (req, res) => {
       console.log(`🔍 Unpaid Query with date filter:`, JSON.stringify(query, null, 2));
     }
     
+    // Log final query for debugging
+    console.log(`🔍 Final Unpaid Query:`, JSON.stringify(query, null, 2));
+    console.log(`🔍 Query params - feeCollector: ${feeCollector || 'none'}, assignTo: ${assignTo || 'none'}`);
+    
     const totalCount = await usersCollection.countDocuments(query);
     const users = await usersCollection
       .find(query)
@@ -2146,6 +2150,12 @@ app.get('/api/users/unpaid', async (req, res) => {
       .toArray();
     
     console.log(`Unpaid users: ${users.length} found, ${totalCount} total`);
+    if (feeCollector || assignTo) {
+      console.log(`🔒 Filtered users - feeCollector: ${feeCollector || 'none'}, assignTo: ${assignTo || 'none'}`);
+      users.forEach(u => {
+        console.log(`  - ${u.userName}: feeCollector=${u.feeCollector || 'none'}, assignTo=${u.assignTo || 'none'}`);
+      });
+    }
     
     res.status(200).json({
       success: true,
@@ -2450,11 +2460,23 @@ app.get('/api/users/expiring-soon', async (req, res) => {
       query.showInExpiringSoon = true;
     }
     
-    // Filter by fee collector if provided (case-insensitive)
+    // STRICT: Filter by fee collector if provided (case-insensitive) - ALWAYS apply
     if (feeCollector) {
       const feeCollectorTrimmed = feeCollector.trim();
-      query.feeCollector = { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') };
-      console.log(`🔍 Filtering /api/users/expiring-soon by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
+      if (feeCollectorTrimmed) {
+        query.feeCollector = { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') };
+        console.log(`🔒 STRICT: Filtering /api/users/expiring-soon by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
+      }
+    }
+    
+    // STRICT: Filter by assignTo (technician) if provided (case-insensitive) - ALWAYS apply
+    const assignTo = req.query.assignTo; // Technician assignment filter
+    if (assignTo) {
+      const assignToTrimmed = assignTo.trim();
+      if (assignToTrimmed) {
+        query.assignTo = { $regex: new RegExp(`^${assignToTrimmed}$`, 'i') };
+        console.log(`🔒 STRICT: Filtering /api/users/expiring-soon by assignTo (technician, case-insensitive): ${assignToTrimmed}`);
+      }
     }
     
     const usersAll = await usersCollection.find(query).toArray();
