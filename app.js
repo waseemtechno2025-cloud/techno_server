@@ -1767,24 +1767,39 @@ app.get('/api/dashboard/stats', async (req, res) => {
             const monthReceivedBy = month.receivedBy || '';
             const paymentHistory = Array.isArray(month.paymentHistory) ? month.paymentHistory : [];
             
-            // Check if receivedBy is "Myself" (case-insensitive)
-            const isMyself = monthReceivedBy && 
-              new RegExp(`^Myself$`, 'i').test(monthReceivedBy.trim());
-            
-            if (isMyself) {
-              // If paymentHistory exists, use it (more accurate - individual payments)
-              // Otherwise use month.paidAmount
-              if (paymentHistory.length > 0) {
-                paymentHistory.forEach((payment) => {
-                  const paymentReceivedBy = payment.receivedBy || '';
-                  if (paymentReceivedBy && new RegExp(`^Myself$`, 'i').test(paymentReceivedBy.trim())) {
-                    incomeFromVouchers += Number(payment.amount || 0);
-                  }
-                });
-              } else {
-                // No paymentHistory, but month.receivedBy is "Myself" - use month.paidAmount
+            // CRITICAL: Always use paymentHistory for accurate income calculation
+            // paymentHistory contains individual payments with their receivedBy values
+            // This prevents double-counting and ensures only payments made by "Myself" are counted
+            if (paymentHistory.length > 0) {
+              // Use paymentHistory - only count payments where receivedBy is "Myself"
+              // This is the most accurate method as it tracks each individual payment
+              paymentHistory.forEach((payment) => {
+                const paymentReceivedBy = payment.receivedBy || '';
+                if (paymentReceivedBy && new RegExp(`^Myself$`, 'i').test(paymentReceivedBy.trim())) {
+                  const paymentAmount = Number(payment.amount || 0);
+                  incomeFromVouchers += paymentAmount;
+                  console.log(`   ✅ Counting payment from paymentHistory: Rs ${paymentAmount} (receivedBy: ${paymentReceivedBy})`);
+                }
+              });
+            } else {
+              // No paymentHistory - this should not happen for new payments
+              // Only count if month.receivedBy is "Myself" AND there's no paymentHistory
+              // This handles old data that might not have paymentHistory
+              // WARNING: month.paidAmount might include payments from other receivers, so this is not 100% accurate
+              const isMyself = monthReceivedBy && 
+                new RegExp(`^Myself$`, 'i').test(monthReceivedBy.trim());
+              
+              if (isMyself) {
+                // Only count if paymentHistory is completely empty AND receivedBy is "Myself"
+                // This means the entire payment was made by admin (old data scenario)
+                // For new payments (after the fix), paymentHistory should always exist
                 const paidAmt = Number(month.paidAmount || 0);
-                incomeFromVouchers += paidAmt;
+                if (paidAmt > 0) {
+                  incomeFromVouchers += paidAmt;
+                  console.log(`   ⚠️ No paymentHistory for ${month.month}, using month.paidAmount: Rs ${paidAmt} (old data - may be inaccurate if multiple payments)`);
+                }
+              } else {
+                console.log(`   ⏭️ Skipping ${month.month}: receivedBy is not "Myself" and no paymentHistory`);
               }
             }
           });
