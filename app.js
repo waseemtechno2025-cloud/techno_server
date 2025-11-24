@@ -1394,7 +1394,7 @@ app.delete('/api/equipment/:id', async (req, res) => {
 // ============ DASHBOARD API ROUTES ============
 
 // GET dashboard stats
-app.get('/api/dashboard/stats', ensureDbConnection, async (req, res) => {
+app.get('/api/dashboard/stats', async (req, res) => {
   try {
     const usersCollection = db.collection('users');
     const transactionsCollection = db.collection('transactions');
@@ -1945,21 +1945,12 @@ app.get('/api/dashboard/stats', ensureDbConnection, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('❌ Error fetching dashboard stats:', error);
-    console.error('❌ Error stack:', error.stack);
-    
-    // Ensure we always return valid JSON
-    try {
-      res.status(500).json({
-        success: false,
-        message: 'Error fetching dashboard stats',
-        error: error.message || 'Unknown error'
-      });
-    } catch (jsonError) {
-      // If JSON response fails, send plain text (shouldn't happen, but safety)
-      console.error('❌ Failed to send JSON error response:', jsonError);
-      res.status(500).send(`Error: ${error.message || 'Unknown error'}`);
-    }
+    console.error('Error fetching dashboard stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching dashboard stats',
+      error: error.message
+    });
   }
 });
 
@@ -5231,178 +5222,6 @@ app.get('/api/refunds/:userId', ensureDbConnection, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error fetching refunds',
-      error: error.message
-    });
-  }
-});
-
-// POST unreverse a month - convert reversed month back to unpaid
-app.post('/api/refunds/unreverse', ensureDbConnection, async (req, res) => {
-  try {
-    const { userId, month } = req.body;
-    
-    if (!userId || !month) {
-      return res.status(400).json({
-        success: false,
-        message: 'userId and month are required'
-      });
-    }
-    
-    console.log(`🔄 Unreversing month ${month} for user ${userId}`);
-    
-    const refundsCollection = db.collection('refunds');
-    
-    // Find refund record containing this month
-    const refund = await refundsCollection.findOne({
-      userId,
-      'refundedMonths.month': month
-    });
-    
-    if (!refund) {
-      return res.status(404).json({
-        success: false,
-        message: 'Refund record not found for this month'
-      });
-    }
-    
-    console.log(`✅ Found refund record: ${refund._id}`);
-    
-    // Find the specific refunded month data
-    const refundedMonth = refund.refundedMonths.find((m: any) => m.month === month);
-    if (!refundedMonth) {
-      return res.status(404).json({
-        success: false,
-        message: 'Refunded month not found in refund record'
-      });
-    }
-    
-    // Find the voucher
-    const voucher = await vouchersCollection.findOne({ 
-      _id: new ObjectId(refund.voucherId) 
-    });
-    
-    if (!voucher) {
-      return res.status(404).json({
-        success: false,
-        message: 'Voucher not found'
-      });
-    }
-    
-    // Find the month in voucher
-    const monthIndex = voucher.months.findIndex((m: any) => m.month === month);
-    if (monthIndex === -1) {
-      return res.status(404).json({
-        success: false,
-        message: 'Month not found in voucher'
-      });
-    }
-    
-    const monthData = voucher.months[monthIndex];
-    const packageFee = Number(monthData.packageFee || refundedMonth.packageFee || 0);
-    const discount = Number(monthData.discount || refundedMonth.discount || 0);
-    const fullAmount = packageFee - discount;
-    
-    // Update voucher month: convert to unpaid, clear payment history
-    await vouchersCollection.updateOne(
-      { 
-        _id: new ObjectId(refund.voucherId),
-        'months.month': month
-      },
-      {
-        $set: {
-          'months.$.status': 'unpaid',
-          'months.$.paidAmount': 0,
-          'months.$.remainingAmount': fullAmount,
-          'months.$.paymentMethod': '',
-          'months.$.receivedBy': '',
-          'months.$.paymentHistory': []
-        },
-        $unset: {
-          'months.$.refundDate': '',
-          'months.$.refundedAmount': ''
-        }
-      }
-    );
-    
-    console.log(`✅ Updated month ${month} to unpaid status`);
-    
-    // If this was the only month in the refund, delete the entire refund record
-    // Otherwise, remove just this month from the refund record
-    if (refund.refundedMonths.length === 1) {
-      await refundsCollection.deleteOne({ _id: refund._id });
-      console.log(`🗑️ Deleted refund record (only month was ${month})`);
-    } else {
-      // Remove this month from refundedMonths array
-      await refundsCollection.updateOne(
-        { _id: refund._id },
-        {
-          $pull: { refundedMonths: { month } },
-          $set: {
-            totalRefundedAmount: refund.refundedMonths
-              .filter((m: any) => m.month !== month)
-              .reduce((sum: number, m: any) => sum + (m.refundedAmount || 0), 0)
-          }
-        }
-      );
-      console.log(`✅ Removed month ${month} from refund record`);
-    }
-    
-    // Recalculate user totals
-    const userVouchers = await vouchersCollection.find({ userId }).toArray();
-    let totalPaid = 0;
-    let totalRemaining = 0;
-    
-    for (const v of userVouchers) {
-      if (v.months && Array.isArray(v.months)) {
-        const nonReversedMonths = v.months.filter((m: any) => {
-          const isReversed = !!(m.refundDate || m.refundedAmount);
-          return !isReversed;
-        });
-        
-        nonReversedMonths.forEach((m: any) => {
-          totalPaid += Number(m.paidAmount || 0);
-          totalRemaining += Number(m.remainingAmount || 0);
-        });
-      }
-    }
-    
-    // Determine user status
-    let newStatus = 'unpaid';
-    if (totalRemaining === 0 && totalPaid > 0) {
-      newStatus = 'paid';
-    } else if (totalPaid > 0) {
-      newStatus = 'partial';
-    }
-    
-    // Update user
-    await usersCollection.updateOne(
-      { _id: new ObjectId(userId) },
-      {
-        $set: {
-          status: newStatus,
-          paymentStatus: newStatus,
-          paidAmount: totalPaid,
-          remainingAmount: totalRemaining
-        }
-      }
-    );
-    
-    console.log(`✅ Updated user status: ${newStatus}, paid: ${totalPaid}, remaining: ${totalRemaining}`);
-    
-    res.status(200).json({
-      success: true,
-      message: `Month ${month} successfully converted to unpaid`,
-      data: {
-        month,
-        status: 'unpaid',
-        remainingAmount: fullAmount
-      }
-    });
-  } catch (error) {
-    console.error('Error unreversing month:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error unreversing month',
       error: error.message
     });
   }
