@@ -1752,20 +1752,47 @@ app.get('/api/dashboard/stats', async (req, res) => {
       totalIncome = incomeFromVouchers;
       console.log(`💰 Total income from vouchers (receivedBy=${feeCollectorTrimmed}): Rs ${totalIncome}`);
     } else {
-      // No feeCollector filter - calculate normally from user documents
-    let incomeUsersQuery = {
-      status: { $in: ['paid', 'partial'] },
-      $or: [
-        { serviceStatus: { $ne: 'inactive' } },
-        { serviceStatus: { $exists: false } }
-      ]
-    };
-    if (assignTo) {
-      incomeUsersQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
-    }
-    
-    const incomeUsers = await usersCollection.find(incomeUsersQuery).toArray();
-      totalIncome = incomeUsers.reduce((sum, user) => sum + Number(user.paidAmount || user.amount || 0), 0);
+      // No feeCollector filter - Admin login
+      // CRITICAL: Admin ki income sirf "Myself" select karne par increase hogi
+      // Employee name select karne par admin ki income increase nahi hogi
+      console.log(`💰 Admin login - Calculating income from vouchers with receivedBy: "Myself"`);
+      
+      const allVouchersForIncome = await vouchersCol.find({}).toArray();
+      let incomeFromVouchers = 0;
+      
+      allVouchersForIncome.forEach(voucher => {
+        if (Array.isArray(voucher.months)) {
+          voucher.months.forEach(month => {
+            // Check if month has paid amount and receivedBy is "Myself"
+            const monthReceivedBy = month.receivedBy || '';
+            const paymentHistory = Array.isArray(month.paymentHistory) ? month.paymentHistory : [];
+            
+            // Check if receivedBy is "Myself" (case-insensitive)
+            const isMyself = monthReceivedBy && 
+              new RegExp(`^Myself$`, 'i').test(monthReceivedBy.trim());
+            
+            if (isMyself) {
+              // If paymentHistory exists, use it (more accurate - individual payments)
+              // Otherwise use month.paidAmount
+              if (paymentHistory.length > 0) {
+                paymentHistory.forEach((payment) => {
+                  const paymentReceivedBy = payment.receivedBy || '';
+                  if (paymentReceivedBy && new RegExp(`^Myself$`, 'i').test(paymentReceivedBy.trim())) {
+                    incomeFromVouchers += Number(payment.amount || 0);
+                  }
+                });
+              } else {
+                // No paymentHistory, but month.receivedBy is "Myself" - use month.paidAmount
+                const paidAmt = Number(month.paidAmount || 0);
+                incomeFromVouchers += paidAmt;
+              }
+            }
+          });
+        }
+      });
+      
+      totalIncome = incomeFromVouchers;
+      console.log(`💰 Admin total income from vouchers (receivedBy="Myself"): Rs ${totalIncome}`);
     }
     
     // Total expense - combine both transactions and expenses collections
