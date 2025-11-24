@@ -1770,6 +1770,8 @@ app.get('/api/dashboard/stats', async (req, res) => {
             // CRITICAL: Always use paymentHistory for accurate income calculation
             // paymentHistory contains individual payments with their receivedBy values
             // This prevents double-counting and ensures only payments made by "Myself" are counted
+            // IMPORTANT: We ONLY count from paymentHistory to avoid counting total paidAmount
+            // which might include payments from other receivers (e.g., employee's 1000 + admin's 200 = 1200)
             if (paymentHistory.length > 0) {
               // Use paymentHistory - only count payments where receivedBy is "Myself"
               // This is the most accurate method as it tracks each individual payment
@@ -1779,28 +1781,17 @@ app.get('/api/dashboard/stats', async (req, res) => {
                   const paymentAmount = Number(payment.amount || 0);
                   incomeFromVouchers += paymentAmount;
                   console.log(`   ✅ Counting payment from paymentHistory: Rs ${paymentAmount} (receivedBy: ${paymentReceivedBy})`);
+                } else {
+                  console.log(`   ⏭️ Skipping payment: Rs ${payment.amount} (receivedBy: ${paymentReceivedBy}, not "Myself")`);
                 }
               });
             } else {
-              // No paymentHistory - this should not happen for new payments
-              // Only count if month.receivedBy is "Myself" AND there's no paymentHistory
-              // This handles old data that might not have paymentHistory
-              // WARNING: month.paidAmount might include payments from other receivers, so this is not 100% accurate
-              const isMyself = monthReceivedBy && 
-                new RegExp(`^Myself$`, 'i').test(monthReceivedBy.trim());
-              
-              if (isMyself) {
-                // Only count if paymentHistory is completely empty AND receivedBy is "Myself"
-                // This means the entire payment was made by admin (old data scenario)
-                // For new payments (after the fix), paymentHistory should always exist
-                const paidAmt = Number(month.paidAmount || 0);
-                if (paidAmt > 0) {
-                  incomeFromVouchers += paidAmt;
-                  console.log(`   ⚠️ No paymentHistory for ${month.month}, using month.paidAmount: Rs ${paidAmt} (old data - may be inaccurate if multiple payments)`);
-                }
-              } else {
-                console.log(`   ⏭️ Skipping ${month.month}: receivedBy is not "Myself" and no paymentHistory`);
-              }
+              // No paymentHistory - DO NOT COUNT to avoid double-counting
+              // month.paidAmount includes ALL payments (employee + admin), so we can't determine
+              // how much was paid by admin without paymentHistory
+              // This ensures accurate income calculation
+              console.log(`   ⚠️ No paymentHistory for ${month.month} - skipping (cannot determine admin's portion without paymentHistory)`);
+              console.log(`   ⚠️ month.paidAmount = Rs ${month.paidAmount || 0} (may include payments from other receivers)`);
             }
           });
         }
