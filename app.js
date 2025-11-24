@@ -1394,7 +1394,7 @@ app.delete('/api/equipment/:id', async (req, res) => {
 // ============ DASHBOARD API ROUTES ============
 
 // GET dashboard stats
-app.get('/api/dashboard/stats', async (req, res) => {
+app.get('/api/dashboard/stats', ensureDbConnection, async (req, res) => {
   try {
     const usersCollection = db.collection('users');
     const transactionsCollection = db.collection('transactions');
@@ -1945,12 +1945,21 @@ app.get('/api/dashboard/stats', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching dashboard stats:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error fetching dashboard stats',
-      error: error.message
-    });
+    console.error('❌ Error fetching dashboard stats:', error);
+    console.error('❌ Error stack:', error.stack);
+    
+    // Ensure we always return valid JSON
+    try {
+      res.status(500).json({
+        success: false,
+        message: 'Error fetching dashboard stats',
+        error: error.message || 'Unknown error'
+      });
+    } catch (jsonError) {
+      // If JSON response fails, send plain text (shouldn't happen, but safety)
+      console.error('❌ Failed to send JSON error response:', jsonError);
+      res.status(500).send(`Error: ${error.message || 'Unknown error'}`);
+    }
   }
 });
 
