@@ -1523,31 +1523,36 @@ app.get('/api/dashboard/stats', async (req, res) => {
     });
     
     // Build paid users query with filter
-    // CRITICAL: If feeCollector filter is provided, we already filtered by receivedBy in vouchers above
-    // So we don't need to check user.feeCollector - just use the userIds from vouchers
+    // CRITICAL: For feeCollector filter:
+    // - Income calculation: Uses receivedBy (already calculated above) ✅
+    // - Paid users count: Uses user.feeCollector (to show assigned users regardless of receivedBy)
+    // This allows employee to see their assigned users in paid-users.tsx, even if payment was received by admin ("Myself")
     let paidUsersQuery = {
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
-      ]
+      ],
+      status: { $in: ['paid', 'partial'] } // Only count paid/partial users
     };
-    if (paidUserIds.length > 0) {
-      paidUsersQuery._id = { $in: paidUserIds };
-    }
-    // Only add feeCollector filter if we don't have paidUserIds (from vouchers with receivedBy)
-    // If we have paidUserIds, they're already filtered by receivedBy in vouchers
-    if (feeCollector && paidUserIds.length === 0) {
-      // No paid months found with receivedBy match, but still check user.feeCollector as fallback
+    
+    if (feeCollector) {
+      // For fee collector, use user.feeCollector filter (not receivedBy)
+      // This ensures employee sees their assigned users in paid-users.tsx
+      // Income is already calculated from receivedBy above (correct)
       paidUsersQuery.feeCollector = { $regex: new RegExp(`^${feeCollector.trim()}$`, 'i') };
-      console.log(`🔒 Dashboard Stats - Using user.feeCollector filter (no vouchers with receivedBy match)`);
-    } else if (feeCollector && paidUserIds.length > 0) {
-      console.log(`🔒 Dashboard Stats - Using receivedBy filter from vouchers (${paidUserIds.length} users)`);
+      console.log(`🔒 Dashboard Stats - Using user.feeCollector filter for paid users count: ${feeCollector.trim()}`);
+      console.log(`💰 Income calculation uses receivedBy (already calculated above)`);
+    } else if (paidUserIds.length > 0) {
+      // No feeCollector filter - use userIds from vouchers
+      paidUsersQuery._id = { $in: paidUserIds };
+      console.log(`🔒 Dashboard Stats - Using userIds from vouchers (${paidUserIds.length} users)`);
     }
+    
     if (assignTo) {
       paidUsersQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
     }
     
-    const paidUsers = paidUserIds.length > 0 ? await usersCollection.countDocuments(paidUsersQuery) : 0;
+    const paidUsers = await usersCollection.countDocuments(paidUsersQuery);
     
     // Count unpaid users (users with at least one unpaid month) - exclude inactive
     // CRITICAL: For fee collector, use EXACT same logic as /api/users/unpaid endpoint
@@ -2060,35 +2065,33 @@ app.get('/api/users/paid', async (req, res) => {
     let query = {
       $and: [
         {
-      $or: [
-        { serviceStatus: { $ne: 'inactive' } },
-        { serviceStatus: { $exists: false } }
-      ]
+          $or: [
+            { serviceStatus: { $ne: 'inactive' } },
+            { serviceStatus: { $exists: false } }
+          ]
+        },
+        {
+          // Only show paid or partial users
+          status: { $in: ['paid', 'partial'] }
         }
       ]
     };
     
-    // CRITICAL: If feeCollector filter is provided, ONLY use vouchers with receivedBy match
-    // DO NOT use user.feeCollector as fallback - only show users whose payments were received by this fee collector
+    // CRITICAL: If feeCollector filter is provided:
+    // - Income calculation: Only count payments where receivedBy matches feeCollector (already done above)
+    // - Paid users list: Show users where user.feeCollector matches feeCollector (regardless of receivedBy)
+    // This allows employee to see their assigned users in paid-users.tsx, even if payment was received by admin ("Myself")
     const feeCollectorTrimmed = feeCollector ? feeCollector.trim() : null;
     if (feeCollectorTrimmed) {
-      // STRICT: Only show users whose payments have receivedBy matching feeCollector
-      // If no vouchers found with receivedBy match, return empty (don't use user.feeCollector fallback)
-      if (usersWithPaidMonths.length === 0) {
-        // No paid months found with receivedBy match - return empty result
-        console.log(`⚠️ No users found in vouchers with receivedBy: ${feeCollectorTrimmed} - returning empty result`);
-        return res.status(200).json({
-          success: true,
-          data: [],
-          totalCount: 0,
-          page,
-          limit
-        });
-      } else {
-        // We already filtered by receivedBy in vouchers, so usersWithPaidMonths are correct
-        // No need to add feeCollector filter - we'll filter by _id below using usersWithPaidMonths
-        console.log(`🔒 STRICT: Filtering /api/users/paid by receivedBy in vouchers: ${feeCollectorTrimmed} (${usersWithPaidMonths.length} users found)`);
-      }
+      // For paid users list, we need to check user.feeCollector (not receivedBy)
+      // This ensures employee sees their assigned users in paid-users.tsx
+      // Income is already calculated from receivedBy above (correct)
+      console.log(`🔒 Filtering /api/users/paid by user.feeCollector: ${feeCollectorTrimmed} (for paid users list)`);
+      console.log(`💰 Income calculation uses receivedBy (already filtered above)`);
+      
+      // Clear usersWithPaidMonths - we'll use user.feeCollector filter instead
+      // This allows showing users assigned to employee even if payment was received by admin
+      usersWithPaidMonths = [];
     }
     
     // STRICT: Filter by assignTo (technician) if provided (case-insensitive) - ALWAYS apply
@@ -2127,15 +2130,27 @@ app.get('/api/users/paid', async (req, res) => {
       console.log(`🔍 Filtering by users with paid months: ${objectIds.length} users`);
     } else if (!paymentDate && usersWithPaidMonths.length === 0) {
       // No users with paid months from vouchers
-      // If feeCollector filter is provided, we already returned empty above
-      // So this case is only for when there's no feeCollector filter
-      return res.status(200).json({
-        success: true,
-        data: [],
-        totalCount: 0,
-        page,
-        limit
-      });
+      // If feeCollector filter is provided, we'll use user.feeCollector filter instead (see below)
+      // So don't return empty here - let the query proceed with user.feeCollector filter
+      if (!feeCollectorTrimmed) {
+        // No feeCollector filter and no paid months - return empty
+        return res.status(200).json({
+          success: true,
+          data: [],
+          totalCount: 0,
+          page,
+          limit
+        });
+      }
+    }
+    
+    // CRITICAL: If feeCollector filter is provided and we don't have usersWithPaidMonths,
+    // use user.feeCollector filter to show assigned users (regardless of receivedBy)
+    // This allows employee to see their assigned users in paid-users.tsx
+    if (feeCollectorTrimmed && usersWithPaidMonths.length === 0) {
+      query.$and.push({ feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } });
+      query.$and.push({ status: { $in: ['paid', 'partial'] } }); // Only show paid/partial users
+      console.log(`🔒 Using user.feeCollector filter for paid users list: ${feeCollectorTrimmed}`);
     }
     
     const totalCount = await usersCollection.countDocuments(query);
