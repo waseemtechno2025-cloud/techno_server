@@ -5389,6 +5389,122 @@ app.post('/api/refunds/process-payment', ensureDbConnection, async (req, res) =>
   }
 });
 
+// POST convert paid/partial month to unpaid (clear payment history)
+app.post('/api/vouchers/convert-to-unpaid', ensureDbConnection, async (req, res) => {
+  try {
+    const { userId, month } = req.body;
+    
+    if (!userId || !month) {
+      return res.status(400).json({
+        success: false,
+        message: 'userId and month are required'
+      });
+    }
+    
+    console.log(`🔄 Converting month ${month} to unpaid for user ${userId}`);
+    
+    // Find voucher for this user
+    const voucher = await vouchersCollection.findOne({ userId });
+    
+    if (!voucher) {
+      return res.status(404).json({
+        success: false,
+        message: 'Voucher not found for this user'
+      });
+    }
+    
+    if (!Array.isArray(voucher.months)) {
+      return res.status(404).json({
+        success: false,
+        message: 'Month not found in voucher'
+      });
+    }
+    
+    // Find the month to convert
+    const monthIndex = voucher.months.findIndex((m: any) => m.month === month);
+    if (monthIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        message: 'Month not found in voucher'
+      });
+    }
+    
+    const monthData = voucher.months[monthIndex];
+    const packageFee = Number(monthData.packageFee || 0);
+    const discount = Number(monthData.discount || 0);
+    const fullAmount = packageFee - discount;
+    
+    // Update month: convert to unpaid, clear payment history
+    const updatedMonths = [...voucher.months];
+    updatedMonths[monthIndex] = {
+      ...monthData,
+      status: 'unpaid',
+      paidAmount: 0,
+      remainingAmount: fullAmount,
+      paymentMethod: '',
+      receivedBy: '',
+      paymentHistory: []
+    };
+    
+    // Update voucher
+    await vouchersCollection.updateOne(
+      { _id: voucher._id },
+      { $set: { months: updatedMonths } }
+    );
+    
+    console.log(`✅ Updated month ${month} to unpaid status`);
+    
+    // Recalculate user totals
+    const nonReversedMonths = updatedMonths.filter((m: any) => {
+      const isReversed = !!(m.refundDate || m.refundedAmount);
+      return !isReversed;
+    });
+    
+    const totalPaid = nonReversedMonths.reduce((sum: number, m: any) => sum + (m.paidAmount || 0), 0);
+    const totalRemaining = nonReversedMonths.reduce((sum: number, m: any) => sum + (m.remainingAmount || 0), 0);
+    
+    // Determine user status
+    let newStatus = 'unpaid';
+    if (totalRemaining === 0 && totalPaid > 0) {
+      newStatus = 'paid';
+    } else if (totalPaid > 0) {
+      newStatus = 'partial';
+    }
+    
+    // Update user
+    await usersCollection.updateOne(
+      { _id: new ObjectId(userId) },
+      {
+        $set: {
+          status: newStatus,
+          paymentStatus: newStatus,
+          paidAmount: totalPaid,
+          remainingAmount: totalRemaining
+        }
+      }
+    );
+    
+    console.log(`✅ Updated user status: ${newStatus}, paid: ${totalPaid}, remaining: ${totalRemaining}`);
+    
+    res.status(200).json({
+      success: true,
+      message: `Month ${month} successfully converted to unpaid`,
+      data: {
+        month,
+        status: 'unpaid',
+        remainingAmount: fullAmount
+      }
+    });
+  } catch (error) {
+    console.error('Error converting month to unpaid:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error converting month to unpaid',
+      error: error.message
+    });
+  }
+});
+
 // DELETE voucher
 app.delete('/api/vouchers/:id', ensureDbConnection, async (req, res) => {
   try {
