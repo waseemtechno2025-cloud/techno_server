@@ -5421,7 +5421,7 @@ app.post('/api/vouchers/convert-to-unpaid', ensureDbConnection, async (req, res)
     }
     
     // Find the month to convert
-    const monthIndex = voucher.months.findIndex((m: any) => m.month === month);
+    const monthIndex = voucher.months.findIndex((m) => m.month === month);
     if (monthIndex === -1) {
       return res.status(404).json({
         success: false,
@@ -5455,13 +5455,13 @@ app.post('/api/vouchers/convert-to-unpaid', ensureDbConnection, async (req, res)
     console.log(`✅ Updated month ${month} to unpaid status`);
     
     // Recalculate user totals
-    const nonReversedMonths = updatedMonths.filter((m: any) => {
+    const nonReversedMonths = updatedMonths.filter((m) => {
       const isReversed = !!(m.refundDate || m.refundedAmount);
       return !isReversed;
     });
     
-    const totalPaid = nonReversedMonths.reduce((sum: number, m: any) => sum + (m.paidAmount || 0), 0);
-    const totalRemaining = nonReversedMonths.reduce((sum: number, m: any) => sum + (m.remainingAmount || 0), 0);
+    const totalPaid = nonReversedMonths.reduce((sum, m) => sum + (m.paidAmount || 0), 0);
+    const totalRemaining = nonReversedMonths.reduce((sum, m) => sum + (m.remainingAmount || 0), 0);
     
     // Determine user status
     let newStatus = 'unpaid';
@@ -6082,12 +6082,21 @@ app.get('/api/complaints', ensureDbConnection, async (req, res) => {
       count: formattedComplaints.length
     });
   } catch (error) {
-    console.error('Error fetching complaints:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error fetching complaints',
-      error: error.message
-    });
+    console.error('❌ Error fetching complaints:', error);
+    console.error('❌ Error stack:', error.stack);
+    
+    // Ensure we always return valid JSON
+    try {
+      res.status(500).json({
+        success: false,
+        message: 'Error fetching complaints',
+        error: error.message || 'Unknown error'
+      });
+    } catch (jsonError) {
+      // If JSON response fails, send plain text (shouldn't happen, but safety)
+      console.error('❌ Failed to send JSON error response:', jsonError);
+      res.status(500).send(`Error: ${error.message || 'Unknown error'}`);
+    }
   }
 });
 
