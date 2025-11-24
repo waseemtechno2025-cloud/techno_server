@@ -1767,6 +1767,14 @@ app.get('/api/dashboard/stats', async (req, res) => {
             const monthReceivedBy = month.receivedBy || '';
             const paymentHistory = Array.isArray(month.paymentHistory) ? month.paymentHistory : [];
             
+            console.log(`\n🔍 Checking month: ${month.month}`);
+            console.log(`   month.paidAmount: Rs ${month.paidAmount || 0}`);
+            console.log(`   month.receivedBy: ${monthReceivedBy}`);
+            console.log(`   paymentHistory.length: ${paymentHistory.length}`);
+            if (paymentHistory.length > 0) {
+              console.log(`   paymentHistory entries:`, paymentHistory.map(p => `Rs ${p.amount} by ${p.receivedBy}`).join(', '));
+            }
+            
             // CRITICAL: Always use paymentHistory for accurate income calculation
             // paymentHistory contains individual payments with their receivedBy values
             // This prevents double-counting and ensures only payments made by "Myself" are counted
@@ -1775,16 +1783,19 @@ app.get('/api/dashboard/stats', async (req, res) => {
             if (paymentHistory.length > 0) {
               // Use paymentHistory - only count payments where receivedBy is "Myself"
               // This is the most accurate method as it tracks each individual payment
+              let monthIncome = 0;
               paymentHistory.forEach((payment) => {
                 const paymentReceivedBy = payment.receivedBy || '';
+                const paymentAmount = Number(payment.amount || 0);
                 if (paymentReceivedBy && new RegExp(`^Myself$`, 'i').test(paymentReceivedBy.trim())) {
-                  const paymentAmount = Number(payment.amount || 0);
-                  incomeFromVouchers += paymentAmount;
+                  monthIncome += paymentAmount;
                   console.log(`   ✅ Counting payment from paymentHistory: Rs ${paymentAmount} (receivedBy: ${paymentReceivedBy})`);
                 } else {
-                  console.log(`   ⏭️ Skipping payment: Rs ${payment.amount} (receivedBy: ${paymentReceivedBy}, not "Myself")`);
+                  console.log(`   ⏭️ Skipping payment: Rs ${paymentAmount} (receivedBy: ${paymentReceivedBy}, not "Myself")`);
                 }
               });
+              incomeFromVouchers += monthIncome;
+              console.log(`   💰 Month income added: Rs ${monthIncome}`);
             } else {
               // No paymentHistory - DO NOT COUNT to avoid double-counting
               // month.paidAmount includes ALL payments (employee + admin), so we can't determine
@@ -1792,6 +1803,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
               // This ensures accurate income calculation
               console.log(`   ⚠️ No paymentHistory for ${month.month} - skipping (cannot determine admin's portion without paymentHistory)`);
               console.log(`   ⚠️ month.paidAmount = Rs ${month.paidAmount || 0} (may include payments from other receivers)`);
+              console.log(`   ⏭️ NOT counting this month (no paymentHistory)`);
             }
           });
         }
