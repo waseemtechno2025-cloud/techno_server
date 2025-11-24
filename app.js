@@ -1737,7 +1737,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
                   const paymentReceivedBy = payment.receivedBy || '';
                   if (paymentReceivedBy && new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(paymentReceivedBy)) {
                     incomeFromVouchers += Number(payment.amount || 0);
-                  }
+    }
                 });
               } else if (monthMatchesReceivedBy) {
                 // No paymentHistory, but month.receivedBy matches - use month.paidAmount
@@ -1773,8 +1773,8 @@ app.get('/api/dashboard/stats', async (req, res) => {
             console.log(`   paymentHistory.length: ${paymentHistory.length}`);
             if (paymentHistory.length > 0) {
               console.log(`   paymentHistory entries:`, paymentHistory.map(p => `Rs ${p.amount} by ${p.receivedBy}`).join(', '));
-            }
-            
+    }
+    
             // CRITICAL: Always use paymentHistory for accurate income calculation
             // paymentHistory contains individual payments with their receivedBy values
             // This prevents double-counting and ensures only payments made by "Myself" are counted
@@ -1811,6 +1811,37 @@ app.get('/api/dashboard/stats', async (req, res) => {
       
       totalIncome = incomeFromVouchers;
       console.log(`💰 Admin total income from vouchers (receivedBy="Myself"): Rs ${totalIncome}`);
+      
+      // CRITICAL: Add transfer amounts from fee collectors to admin income
+      // When fee collectors transfer money to admin, it should be added to admin's total income
+      try {
+        let collectionsCollection = db.collection('collections');
+        
+        // Check if collections collection exists
+        const collections = await db.listCollections().toArray();
+        const collectionExists = collections.some(c => c.name === 'collections');
+        
+        if (collectionExists) {
+          // Get all transfer amounts (fee collectors se admin ko transfer kiye gaye amounts)
+          const allTransfers = await collectionsCollection.find({}).toArray();
+          let totalTransferAmount = 0;
+          
+          allTransfers.forEach((transfer) => {
+            const transferAmount = Number(transfer.amount || 0);
+            totalTransferAmount += transferAmount;
+            console.log(`   💰 Transfer from ${transfer.feeCollector}: Rs ${transferAmount}`);
+          });
+          
+          totalIncome += totalTransferAmount;
+          console.log(`💰 Total transfer amount added to admin income: Rs ${totalTransferAmount}`);
+          console.log(`💰 Admin total income (vouchers + transfers): Rs ${totalIncome}`);
+        } else {
+          console.log(`ℹ️ Collections collection does not exist - no transfer amounts to add`);
+        }
+      } catch (error) {
+        console.error('❌ Error fetching transfer amounts:', error);
+        // Don't fail the request if transfer fetch fails, just log the error
+      }
     }
     
     // Total expense - combine both transactions and expenses collections
@@ -2110,10 +2141,10 @@ app.get('/api/users/paid', async (req, res) => {
     let query = {
       $and: [
         {
-          $or: [
-            { serviceStatus: { $ne: 'inactive' } },
-            { serviceStatus: { $exists: false } }
-          ]
+      $or: [
+        { serviceStatus: { $ne: 'inactive' } },
+        { serviceStatus: { $exists: false } }
+      ]
         },
         {
           // Only show paid or partial users
@@ -2179,13 +2210,13 @@ app.get('/api/users/paid', async (req, res) => {
       // So don't return empty here - let the query proceed with user.feeCollector filter
       if (!feeCollectorTrimmed) {
         // No feeCollector filter and no paid months - return empty
-        return res.status(200).json({
-          success: true,
-          data: [],
-          totalCount: 0,
-          page,
-          limit
-        });
+      return res.status(200).json({
+        success: true,
+        data: [],
+        totalCount: 0,
+        page,
+        limit
+      });
       }
     }
     
