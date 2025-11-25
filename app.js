@@ -1792,7 +1792,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
                   console.log(`   ✅ Counting payment from paymentHistory: Rs ${paymentAmount} (receivedBy: ${paymentReceivedBy})`);
                 } else {
                   console.log(`   ⏭️ Skipping payment: Rs ${paymentAmount} (receivedBy: ${paymentReceivedBy}, not "Myself")`);
-                }
+    }
               });
               incomeFromVouchers += monthIncome;
               console.log(`   💰 Month income added: Rs ${monthIncome}`);
@@ -2308,11 +2308,19 @@ app.get('/api/users/unpaid', async (req, res) => {
         
         if (Array.isArray(voucher.months)) {
           // CRITICAL: Only include users with TRUE unpaid months (status === 'unpaid')
-          // Exclude partial months - they should only show in Balance tab
+          // AND exclude users who have made ANY payment (they should be in Balance tab)
+          // Check if user has any paid months (paidAmount > 0) - if yes, exclude from unpaid tab
+          const hasPaidMonth = voucher.months.some(m => 
+            !m.refundDate && !m.refundedAmount && Number(m.paidAmount || 0) > 0
+          );
+          
+          // Only include if user has unpaid months AND no paid months
+          // If user has both paid and unpaid months, they should be in Balance tab
           const hasUnpaidMonth = voucher.months.some(m => 
             m.status === 'unpaid' && !m.refundDate && !m.refundedAmount
           );
-          if (hasUnpaidMonth && voucher.userId) {
+          
+          if (hasUnpaidMonth && !hasPaidMonth && voucher.userId) {
             userIdsWithUnpaidMonths.add(voucher.userId.toString());
           }
         }
@@ -2666,10 +2674,66 @@ app.get('/api/balances', async (req, res) => {
     const feeCollector = req.query.feeCollector; // Fee collector name filter
     const assignTo = req.query.assignTo; // Technician assignment filter
     
-    // Base query
+    // CRITICAL: Balance tab should show users who have ANY remaining amount
+    // This includes users with status 'partial' OR users who have unpaid/partial months in vouchers
+    // Check vouchers to find users with remaining amounts (unpaid or partial months)
+    let usersWithRemainingAmount = [];
+    
+    if (!expiryDate) {
+      // No date filter - check all vouchers for remaining amounts
+      let userFilterForVouchers = {};
+      if (feeCollector) {
+        const feeCollectorTrimmed = feeCollector.trim();
+        if (feeCollectorTrimmed) {
+          userFilterForVouchers.feeCollector = { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') };
+        }
+      }
+      if (assignTo) {
+        const assignToTrimmed = assignTo.trim();
+        if (assignToTrimmed) {
+          userFilterForVouchers.assignTo = { $regex: new RegExp(`^${assignToTrimmed}$`, 'i') };
+        }
+      }
+      
+      // If we have user filters, get matching user IDs first, then check their vouchers
+      let relevantUserIds = null;
+      if (Object.keys(userFilterForVouchers).length > 0) {
+        const matchingUsers = await usersCollection.find(userFilterForVouchers).project({ _id: 1 }).toArray();
+        relevantUserIds = new Set(matchingUsers.map(u => u._id.toString()));
+        console.log(`🔒 Pre-filtered ${relevantUserIds.size} users by feeCollector/assignTo before checking vouchers for balance`);
+      }
+      
+      const allVouchers = await vouchersCollection.find({}).toArray();
+      
+      const userIdsWithRemainingAmount = new Set();
+      allVouchers.forEach(voucher => {
+        // Skip vouchers for users not matching feeCollector/assignTo filter
+        if (relevantUserIds && voucher.userId && !relevantUserIds.has(voucher.userId.toString())) {
+          return;
+        }
+        
+        if (Array.isArray(voucher.months)) {
+          // Include users who have ANY remaining amount (unpaid or partial months)
+          // This ensures users with both paid and unpaid months show in balance tab
+          const hasRemainingAmount = voucher.months.some(m => {
+            const isReversed = !!(m.refundDate || m.refundedAmount);
+            if (isReversed) return false;
+            const remaining = Number(m.remainingAmount || 0);
+            return remaining > 0;
+          });
+          
+          if (hasRemainingAmount && voucher.userId) {
+            userIdsWithRemainingAmount.add(voucher.userId.toString());
+          }
+        }
+      });
+      
+      usersWithRemainingAmount = Array.from(userIdsWithRemainingAmount);
+      console.log(`📊 Found ${usersWithRemainingAmount.length} users with remaining amount (after feeCollector/assignTo filter)`);
+    }
+    
+    // Base query - include users with status 'partial' OR users found in vouchers
     let query = {
-      status: 'partial',
-      remainingAmount: { $gt: 0 },
       $and: [
         {
           $or: [
@@ -2679,6 +2743,26 @@ app.get('/api/balances', async (req, res) => {
         }
       ]
     };
+    
+    // Include users with status 'partial' and remainingAmount > 0, OR users found in vouchers
+    if (usersWithRemainingAmount.length > 0) {
+      const objectIds = usersWithRemainingAmount.map(id => {
+        try {
+          return new ObjectId(id);
+        } catch (e) {
+          return id;
+        }
+      });
+      query.$and.push({
+        $or: [
+          { status: 'partial', remainingAmount: { $gt: 0 } },
+          { _id: { $in: objectIds } }
+        ]
+      });
+    } else {
+      // No users from vouchers, use status filter only
+      query.$and.push({ status: 'partial', remainingAmount: { $gt: 0 } });
+    }
     
     // STRICT: Filter by fee collector if provided (case-insensitive) - ALWAYS apply
     if (feeCollector) {
