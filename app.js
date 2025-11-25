@@ -2300,9 +2300,32 @@ app.get('/api/users/unpaid', async (req, res) => {
       const allVouchers = await vouchersCollection.find({}).toArray();
       
       const userIdsWithUnpaidMonths = new Set();
+      
+      // CRITICAL: First get all users to check their status
+      // We need to exclude users with status 'partial' even if they have unpaid months
+      const allUsersForStatusCheck = await usersCollection.find({
+        $or: [
+          { serviceStatus: { $ne: 'inactive' } },
+          { serviceStatus: { $exists: false } }
+        ]
+      }).project({ _id: 1, status: 1 }).toArray();
+      
+      const userStatusMap = new Map();
+      allUsersForStatusCheck.forEach(u => {
+        userStatusMap.set(u._id.toString(), u.status || 'unpaid');
+      });
+      
       allVouchers.forEach(voucher => {
         // Skip vouchers for users not matching feeCollector/assignTo filter
         if (relevantUserIds && voucher.userId && !relevantUserIds.has(voucher.userId.toString())) {
+          return;
+        }
+        
+        // CRITICAL: Check user's status in database - exclude if status is 'partial'
+        const userIdStr = voucher.userId?.toString();
+        const userStatus = userStatusMap.get(userIdStr);
+        if (userStatus === 'partial') {
+          // User has made payment - exclude from unpaid tab
           return;
         }
         
@@ -2365,7 +2388,28 @@ app.get('/api/users/unpaid', async (req, res) => {
     
     // Add filter for users with unpaid months if no date filter
     if (!expiryDate && !unpaidDate && usersWithUnpaidMonths.length > 0) {
-      const objectIds = usersWithUnpaidMonths.map(id => {
+      // CRITICAL: Double-check user status before adding to query
+      // Filter out any users with status 'partial' (they should be in balance tab)
+      const finalUserIds = [];
+      for (const userId of usersWithUnpaidMonths) {
+        const userStatus = userStatusMap.get(userId);
+        if (userStatus !== 'partial') {
+          finalUserIds.push(userId);
+        }
+      }
+      
+      if (finalUserIds.length === 0) {
+        // No valid unpaid users after filtering
+        return res.status(200).json({
+          success: true,
+          data: [],
+          totalCount: 0,
+          page,
+          limit
+        });
+      }
+      
+      const objectIds = finalUserIds.map(id => {
         try {
           return new ObjectId(id);
         } catch (e) {
@@ -2373,7 +2417,9 @@ app.get('/api/users/unpaid', async (req, res) => {
         }
       });
       // CRITICAL: Add _id filter to $and array to combine with feeCollector/assignTo filters
+      // The status filter in query.$and will also ensure partial users are excluded
       query.$and.push({ _id: { $in: objectIds } });
+      console.log(`📊 Filtered ${finalUserIds.length} unpaid users (excluded ${usersWithUnpaidMonths.length - finalUserIds.length} partial users)`);
     } else if (!expiryDate && !unpaidDate && usersWithUnpaidMonths.length === 0) {
       // No users with unpaid months
       return res.status(200).json({
@@ -2514,18 +2560,28 @@ app.get('/api/users/unpaid', async (req, res) => {
       .limit(limit)
       .toArray();
     
-    console.log(`Unpaid users: ${users.length} found, ${totalCount} total`);
+    // CRITICAL: Final safety check - filter out any users with status 'partial' that might have slipped through
+    const finalFilteredUsers = users.filter(u => {
+      const userStatus = u.status || 'unpaid';
+      if (userStatus === 'partial') {
+        console.log(`⚠️ WARNING: User ${u.userName} (${u._id}) has status 'partial' but was returned by unpaid query - filtering out`);
+        return false;
+      }
+      return true;
+    });
+    
+    console.log(`Unpaid users: ${finalFilteredUsers.length} found (${users.length} before final filter), ${totalCount} total`);
     if (feeCollector || assignTo) {
       console.log(`🔒 Filtered users - feeCollector: ${feeCollector || 'none'}, assignTo: ${assignTo || 'none'}`);
-      users.forEach(u => {
+      finalFilteredUsers.forEach(u => {
         console.log(`  - ${u.userName}: feeCollector=${u.feeCollector || 'none'}, assignTo=${u.assignTo || 'none'}`);
       });
     }
     
     res.status(200).json({
       success: true,
-      data: users,
-      totalCount,
+      data: finalFilteredUsers,
+      totalCount: finalFilteredUsers.length < users.length ? totalCount - (users.length - finalFilteredUsers.length) : totalCount,
       page,
       limit
     });
