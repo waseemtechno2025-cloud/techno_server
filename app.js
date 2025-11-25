@@ -4681,6 +4681,84 @@ app.get('/api/routers/filter/sold', async (req, res) => {
   }
 });
 
+// GET router sales report by date range
+app.get('/api/routers/sales-report', async (req, res) => {
+  try {
+    const { fromDate, toDate } = req.query;
+    
+    if (!fromDate || !toDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'From date and to date are required'
+      });
+    }
+
+    const from = new Date(fromDate);
+    from.setHours(0, 0, 0, 0);
+    const to = new Date(toDate);
+    to.setHours(23, 59, 59, 999);
+
+    // Get all routers with sales history
+    const routers = await routersCollection.find({
+      'salesHistory.0': { $exists: true }
+    }).toArray();
+
+    let sales = [];
+    let totalQuantitySold = 0;
+    let totalRevenue = 0;
+    let totalProfit = 0;
+
+    routers.forEach(router => {
+      if (router.salesHistory && router.salesHistory.length > 0) {
+        router.salesHistory.forEach(sale => {
+          const saleDate = new Date(sale.saleDate);
+          if (saleDate >= from && saleDate <= to) {
+            const revenue = sale.quantity * sale.sellingPrice;
+            const purchasePrice = router.purchasePrice || 0;
+            const profit = (sale.sellingPrice - purchasePrice) * sale.quantity;
+            
+            sales.push({
+              brand: router.brand,
+              model: router.model,
+              quantity: sale.quantity,
+              sellingPrice: sale.sellingPrice,
+              customerName: sale.customerName,
+              notes: sale.notes,
+              saleDate: sale.saleDate,
+              profit: profit
+            });
+
+            totalQuantitySold += sale.quantity;
+            totalRevenue += revenue;
+            totalProfit += profit;
+          }
+        });
+      }
+    });
+
+    // Sort sales by date (newest first)
+    sales.sort((a, b) => new Date(b.saleDate) - new Date(a.saleDate));
+
+    res.status(200).json({
+      success: true,
+      data: {
+        sales,
+        totalSales: sales.length,
+        totalQuantitySold,
+        totalRevenue,
+        totalProfit
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching router sales report:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching router sales report',
+      error: error.message
+    });
+  }
+});
+
 // ============ FIBER CABLES API ROUTES ============
 
 // GET all fiber cables
@@ -4864,6 +4942,83 @@ app.get('/api/fiber-cables/filter/sold', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error fetching sold fiber cables',
+      error: error.message
+    });
+  }
+});
+
+// GET fiber cable sales report by date range
+app.get('/api/fiber-cables/sales-report', async (req, res) => {
+  try {
+    const { fromDate, toDate } = req.query;
+    
+    if (!fromDate || !toDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'From date and to date are required'
+      });
+    }
+
+    const from = new Date(fromDate);
+    from.setHours(0, 0, 0, 0);
+    const to = new Date(toDate);
+    to.setHours(23, 59, 59, 999);
+
+    // Get all fiber cables with sales history
+    const cables = await fiberCablesCollection.find({
+      'salesHistory.0': { $exists: true }
+    }).toArray();
+
+    let sales = [];
+    let totalLengthSold = 0;
+    let totalRevenue = 0;
+    let totalProfit = 0;
+
+    cables.forEach(cable => {
+      if (cable.salesHistory && cable.salesHistory.length > 0) {
+        cable.salesHistory.forEach(sale => {
+          const saleDate = new Date(sale.saleDate);
+          if (saleDate >= from && saleDate <= to) {
+            const revenue = sale.length * sale.sellingPrice;
+            const purchasePricePerMeter = cable.purchasePricePerMeter || 0;
+            const profit = (sale.sellingPrice - purchasePricePerMeter) * sale.length;
+            
+            sales.push({
+              type: cable.type,
+              length: sale.length,
+              sellingPrice: sale.sellingPrice,
+              customerName: sale.customerName,
+              notes: sale.notes,
+              saleDate: sale.saleDate,
+              profit: profit
+            });
+
+            totalLengthSold += sale.length;
+            totalRevenue += revenue;
+            totalProfit += profit;
+          }
+        });
+      }
+    });
+
+    // Sort sales by date (newest first)
+    sales.sort((a, b) => new Date(b.saleDate) - new Date(a.saleDate));
+
+    res.status(200).json({
+      success: true,
+      data: {
+        sales,
+        totalSales: sales.length,
+        totalLengthSold,
+        totalRevenue,
+        totalProfit
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching fiber cable sales report:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching fiber cable sales report',
       error: error.message
     });
   }
