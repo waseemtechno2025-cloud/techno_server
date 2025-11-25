@@ -2330,7 +2330,7 @@ app.get('/api/users/unpaid', async (req, res) => {
       console.log(`📊 Found ${usersWithUnpaidMonths.length} users with at least one unpaid month (after feeCollector/assignTo filter)`);
     }
     
-    // Base query - active users only
+    // Base query - active users only, EXCLUDE users with status 'partial' (they should be in balance tab)
     let query = {
       $and: [
         {
@@ -2338,7 +2338,10 @@ app.get('/api/users/unpaid', async (req, res) => {
             { serviceStatus: { $ne: 'inactive' } },
             { serviceStatus: { $exists: false } }
           ]
-        }
+        },
+        // CRITICAL: Exclude users with status 'partial' - they should only show in Balance tab
+        // This ensures that if user has paid any amount, they move to balance tab
+        { status: { $ne: 'partial' } }
       ]
     };
     
