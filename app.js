@@ -4516,7 +4516,7 @@ app.get('/api/routers', async (req, res) => {
 // POST create a new router
 app.post('/api/routers', async (req, res) => {
   try {
-    const { brand, model, quantity, price, purchaseDate, status } = req.body;
+    const { brand, model, quantity, price, purchasePrice, purchaseDate, status } = req.body;
 
     if (!brand || !model || quantity === undefined || price === undefined) {
       return res.status(400).json({
@@ -4531,6 +4531,7 @@ app.post('/api/routers', async (req, res) => {
       quantity: parseInt(quantity),
       quantitySold: 0,
       price: parseFloat(price),
+      purchasePrice: purchasePrice ? parseFloat(purchasePrice) : undefined,
       purchaseDate: purchaseDate || new Date().toISOString().split('T')[0],
       status: status || 'Available',
       salesHistory: [],
