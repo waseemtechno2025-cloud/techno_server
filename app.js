@@ -4516,7 +4516,7 @@ app.get('/api/routers', async (req, res) => {
 // POST create a new router
 app.post('/api/routers', async (req, res) => {
   try {
-    const { brand, model, quantity, price, purchasePrice, purchaseDate, status } = req.body;
+    const { brand, model, quantity, price, purchasePrice, supplier, purchaseDate, status } = req.body;
 
     if (!brand || !model || quantity === undefined || price === undefined) {
       return res.status(400).json({
@@ -4532,6 +4532,7 @@ app.post('/api/routers', async (req, res) => {
       quantitySold: 0,
       price: parseFloat(price),
       purchasePrice: purchasePrice ? parseFloat(purchasePrice) : undefined,
+      supplier: supplier ? supplier.trim() : '',
       purchaseDate: purchaseDate || new Date().toISOString().split('T')[0],
       status: status || 'Available',
       salesHistory: [],
@@ -4704,7 +4705,7 @@ app.get('/api/fiber-cables', async (req, res) => {
 // POST create a new fiber cable
 app.post('/api/fiber-cables', async (req, res) => {
   try {
-    const { type, length, pricePerMeter, purchaseDate, supplier, status } = req.body;
+    const { type, length, pricePerMeter, purchasePricePerMeter, purchaseDate, supplier, status } = req.body;
 
     if (!type || length === undefined || pricePerMeter === undefined) {
       return res.status(400).json({
@@ -4718,6 +4719,7 @@ app.post('/api/fiber-cables', async (req, res) => {
       length: parseFloat(length),
       lengthSold: 0,
       pricePerMeter: parseFloat(pricePerMeter),
+      purchasePricePerMeter: purchasePricePerMeter ? parseFloat(purchasePricePerMeter) : undefined,
       purchaseDate: purchaseDate || new Date().toISOString().split('T')[0],
       supplier: supplier ? supplier.trim() : '',
       status: status || 'Available',
