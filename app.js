@@ -2308,12 +2308,20 @@ app.get('/api/users/unpaid', async (req, res) => {
           { serviceStatus: { $ne: 'inactive' } },
           { serviceStatus: { $exists: false } }
         ]
-      }).project({ _id: 1, status: 1 }).toArray();
+      }).project({ _id: 1, status: 1, userId: 1 }).toArray();
       
       const userStatusMap = new Map();
       allUsersForStatusCheck.forEach(u => {
-        userStatusMap.set(u._id.toString(), u.status || 'unpaid');
+        // Store by both _id and userId to handle both formats
+        const idStr = u._id.toString();
+        const userIdStr = u.userId?.toString();
+        const status = u.status || 'unpaid';
+        userStatusMap.set(idStr, status);
+        if (userIdStr && userIdStr !== idStr) {
+          userStatusMap.set(userIdStr, status);
+        }
       });
+      console.log(`📊 Built userStatusMap with ${userStatusMap.size} entries`);
       
       allVouchers.forEach(voucher => {
         // Skip vouchers for users not matching feeCollector/assignTo filter
@@ -2323,9 +2331,23 @@ app.get('/api/users/unpaid', async (req, res) => {
         
         // CRITICAL: Check user's status in database - exclude if status is 'partial'
         const userIdStr = voucher.userId?.toString();
-        const userStatus = userStatusMap.get(userIdStr);
+        // Try to find user status by userId (could be _id or userId field)
+        let userStatus = userStatusMap.get(userIdStr);
+        
+        // If not found, try to find by _id if userId is an ObjectId
+        if (!userStatus && userIdStr) {
+          try {
+            const userIdObj = new ObjectId(userIdStr);
+            userStatus = userStatusMap.get(userIdObj.toString());
+          } catch (e) {
+            // userId is not a valid ObjectId, skip
+          }
+        }
+        
+        console.log(`🔍 Checking user ${userIdStr}: status=${userStatus || 'not found'}`);
         if (userStatus === 'partial') {
           // User has made payment - exclude from unpaid tab
+          console.log(`   ⏭️ EXCLUDING user ${userIdStr} from unpaid tab (status: partial)`);
           return;
         }
         
