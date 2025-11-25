@@ -6204,4 +6204,112 @@ app.delete('/api/complaints/:id', ensureDbConnection, async (req, res) => {
 });
 
 // Export for Vercel serverless
+// POST endpoint to recalculate user status from vouchers
+app.post('/api/users/:id/recalculate-status', async (req, res) => {
+  try {
+    const userId = req.params.id;
+    const usersCollection = db.collection('users');
+    const vouchersCollection = db.collection('vouchers');
+    
+    console.log(`🔄 Recalculating status for user: ${userId}`);
+    
+    // Fetch user
+    const user = await usersCollection.findOne({ _id: new ObjectId(userId) });
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    
+    // Fetch vouchers directly from database
+    const userVouchers = await vouchersCollection.find({
+      $or: [
+        { userId: userId },
+        { userId: user._id.toString() }
+      ]
+    }).toArray();
+    
+    if (!userVouchers || userVouchers.length === 0) {
+      // No vouchers - set status to unpaid
+      await usersCollection.updateOne(
+        { _id: new ObjectId(userId) },
+        { $set: { status: 'unpaid', paidAmount: 0, remainingAmount: user.amount || 0 } }
+      );
+      return res.status(200).json({ success: true, message: 'Status updated to unpaid (no vouchers)', status: 'unpaid' });
+    }
+    
+    let totalPaid = 0;
+    let totalRemaining = 0;
+    let hasUnpaidMonth = false;
+    
+    for (const v of userVouchers) {
+      if (Array.isArray(v.months)) {
+        for (const m of v.months) {
+          const isReversed = !!(m.refundDate || m.refundedAmount);
+          if (isReversed) continue;
+          
+          if (m.status === 'unpaid') {
+            hasUnpaidMonth = true;
+          }
+          
+          const monthPaid = Number(m.paidAmount || 0);
+          const pkg = Number(m.packageFee || 0);
+          const disc = Number(m.discount || 0);
+          const monthRemaining = (m.remainingAmount !== undefined && m.remainingAmount !== null)
+            ? Number(m.remainingAmount)
+            : Math.max(0, pkg - disc - monthPaid);
+          totalPaid += monthPaid;
+          totalRemaining += monthRemaining;
+        }
+      } else {
+        const isReversed = !!(v.refundDate || v.refundedAmount);
+        if (isReversed) continue;
+        
+        if (v.status === 'unpaid') {
+          hasUnpaidMonth = true;
+        }
+        
+        const monthPaid = Number(v.paidAmount || 0);
+        const pkg = Number(v.packageFee || v.amount || 0);
+        const disc = Number(v.discount || 0);
+        const monthRemaining = (v.remainingAmount !== undefined && v.remainingAmount !== null)
+          ? Number(v.remainingAmount)
+          : Math.max(0, pkg - disc - monthPaid);
+        totalPaid += monthPaid;
+        totalRemaining += monthRemaining;
+      }
+    }
+    
+    // Calculate status based on new logic
+    let calculatedStatus = 'unpaid';
+    if (totalRemaining <= 0) {
+      calculatedStatus = 'paid';
+    } else if (hasUnpaidMonth) {
+      // CRITICAL: If ANY month is unpaid, user should be in Unpaid section
+      calculatedStatus = 'unpaid';
+    } else if (totalPaid > 0 && totalRemaining > 0) {
+      // Only set to 'partial' if user has made payment AND has remaining BUT no unpaid months
+      calculatedStatus = 'partial';
+    }
+    
+    console.log(`📊 Recalculated status: ${calculatedStatus} (totalPaid: ${totalPaid}, totalRemaining: ${totalRemaining}, hasUnpaidMonth: ${hasUnpaidMonth})`);
+    
+    // Update user status
+    await usersCollection.updateOne(
+      { _id: new ObjectId(userId) },
+      { $set: { status: calculatedStatus, paidAmount: totalPaid, remainingAmount: totalRemaining } }
+    );
+    
+    res.status(200).json({
+      success: true,
+      message: 'Status recalculated successfully',
+      status: calculatedStatus,
+      totalPaid,
+      totalRemaining,
+      hasUnpaidMonth
+    });
+  } catch (error) {
+    console.error('Error recalculating user status:', error);
+    res.status(500).json({ success: false, message: 'Error recalculating status', error: error.message });
+  }
+});
+
 module.exports = app;
