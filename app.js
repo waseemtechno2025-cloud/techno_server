@@ -2414,9 +2414,24 @@ app.get('/api/users/unpaid', async (req, res) => {
       // Filter out any users with status 'partial' (they should be in balance tab)
       const finalUserIds = [];
       for (const userId of usersWithUnpaidMonths) {
-        const userStatus = userStatusMap.get(userId);
+        // Try to find user status by userId (could be _id or userId field)
+        let userStatus = userStatusMap.get(userId);
+        
+        // If not found, try to find by _id if userId is an ObjectId
+        if (!userStatus && userId) {
+          try {
+            const userIdObj = new ObjectId(userId);
+            userStatus = userStatusMap.get(userIdObj.toString());
+          } catch (e) {
+            // userId is not a valid ObjectId, skip
+          }
+        }
+        
+        console.log(`🔍 Final filter check for user ${userId}: status=${userStatus || 'not found'}`);
         if (userStatus !== 'partial') {
           finalUserIds.push(userId);
+        } else {
+          console.log(`   ⏭️ EXCLUDING user ${userId} from unpaid tab (status: partial)`);
         }
       }
       
