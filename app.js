@@ -2233,8 +2233,8 @@ app.get('/api/users/paid', async (req, res) => {
     // IMPORTANT: If feeCollector filter is provided, also check receivedBy in vouchers
     let usersWithPaidMonths = [];
     
-    if (!paymentDate) {
-      // No date filter - check all vouchers for paid months
+    if (!paymentDate && !fromDate && !toDate) {
+      // No date filter at all - check all vouchers for paid months
       const allVouchers = await vouchersCollection.find({}).toArray();
       
       const userIdsWithPaidMonths = new Set();
@@ -2328,12 +2328,12 @@ app.get('/api/users/paid', async (req, res) => {
     }
     
     // Add user ID filter if we have users with paid months
-    if (paymentDate && userIds.length > 0) {
+    if ((paymentDate || (fromDate && toDate)) && userIds.length > 0) {
       const objectIds = userIds.map(id => new ObjectId(id));
       query.$and.push({ _id: { $in: objectIds } });
       console.log(`🔍 Filtering users with IDs:`, objectIds.map(id => id.toString()));
-    } else if (paymentDate && userIds.length === 0) {
-      // No users found for this payment date
+    } else if ((paymentDate || (fromDate && toDate)) && userIds.length === 0) {
+      // No users found for this payment date/range
       return res.status(200).json({
         success: true,
         data: [],
@@ -2341,7 +2341,7 @@ app.get('/api/users/paid', async (req, res) => {
         page,
         limit
       });
-    } else if (!paymentDate && usersWithPaidMonths.length > 0) {
+    } else if (!paymentDate && !fromDate && !toDate && usersWithPaidMonths.length > 0) {
       // No date filter - filter by users with paid months (already filtered by receivedBy if feeCollector provided)
       const objectIds = usersWithPaidMonths.map(id => {
         try {
@@ -2352,7 +2352,7 @@ app.get('/api/users/paid', async (req, res) => {
       });
       query.$and.push({ _id: { $in: objectIds } });
       console.log(`🔍 Filtering by users with paid months: ${objectIds.length} users`);
-    } else if (!paymentDate && usersWithPaidMonths.length === 0) {
+    } else if (!paymentDate && !fromDate && !toDate && usersWithPaidMonths.length === 0) {
       // No users with paid months from vouchers
       // If feeCollector filter is provided, we'll use user.feeCollector filter instead (see below)
       // So don't return empty here - let the query proceed with user.feeCollector filter
