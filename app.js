@@ -1961,14 +1961,162 @@ app.get('/api/users/paid', async (req, res) => {
     const vouchersCollection = db.collection('vouchers');
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
-    const paymentDate = req.query.paymentDate; // YYYY-MM-DD format
+    const paymentDate = req.query.paymentDate; // YYYY-MM-DD format (deprecated, use fromDate/toDate)
+    const fromDate = req.query.fromDate; // YYYY-MM-DD format
+    const toDate = req.query.toDate; // YYYY-MM-DD format
     const feeCollector = req.query.feeCollector; // Fee collector name filter
     const assignTo = req.query.assignTo; // Technician assignment filter
     
     let userIds = [];
+    let totalCollectionAmount = 0; // Track total collection for date range
     
-    // If payment date filter is provided, focus on vouchers that recorded paid/partial activity that day
-    if (paymentDate) {
+    // If date range filter is provided (fromDate and toDate)
+    if (fromDate && toDate) {
+      const [fromYearStr, fromMonthStr, fromDayStr] = fromDate.split('-');
+      const [toYearStr, toMonthStr, toDayStr] = toDate.split('-');
+      
+      const fromYear = parseInt(fromYearStr, 10);
+      const fromMonth = parseInt(fromMonthStr, 10) - 1;
+      const fromDay = parseInt(fromDayStr, 10);
+      
+      const toYear = parseInt(toYearStr, 10);
+      const toMonth = parseInt(toMonthStr, 10) - 1;
+      const toDay = parseInt(toDayStr, 10);
+      
+      if (!Number.isNaN(fromYear) && !Number.isNaN(fromMonth) && !Number.isNaN(fromDay) &&
+          !Number.isNaN(toYear) && !Number.isNaN(toMonth) && !Number.isNaN(toDay)) {
+        
+        const startOfRange = new Date(fromYear, fromMonth, fromDay, 0, 0, 0, 0);
+        const endOfRange = new Date(toYear, toMonth, toDay + 1, 0, 0, 0, 0); // End of toDate
+
+        console.log(`📅 Date range filter: ${fromDate} to ${toDate} → window ${startOfRange.toISOString()} to ${endOfRange.toISOString()}`);
+
+        const formatToIso = (date) => date.toISOString().split('T')[0];
+        const formatToLocal = (date) => {
+          try {
+            return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(date);
+          } catch (err) {
+            return formatToIso(date);
+          }
+        };
+
+        const normalizeToIsoString = (value) => {
+          if (!value) return null;
+          if (value instanceof Date) {
+            return [formatToIso(value), formatToLocal(value)];
+          }
+
+          if (typeof value === 'string') {
+            const native = new Date(value);
+            if (!Number.isNaN(native.getTime())) {
+              return [formatToIso(native), formatToLocal(native)];
+            }
+
+            const parts = value.split(/[-\/]/);
+            if (parts.length === 3) {
+              let [a, b, c] = parts;
+              if (a.length === 4) {
+                return [`${a}-${b.padStart(2, '0')}-${c.padStart(2, '0')}`];
+              }
+              const dayPart = a.padStart(2, '0');
+              const monthPart = b.padStart(2, '0');
+              const yearPart = c;
+              return [`${yearPart}-${monthPart}-${dayPart}`];
+            }
+          }
+
+          return null;
+        };
+
+        const isDateInRange = (value) => {
+          const normalized = normalizeToIsoString(value);
+          if (!normalized) return false;
+          
+          return normalized.some((isoDate) => {
+            const checkDate = new Date(isoDate);
+            return checkDate >= startOfRange && checkDate < endOfRange;
+          });
+        };
+
+        const vouchers = await vouchersCollection.find({ 'months.status': { $in: ['paid', 'partial'] } }).toArray();
+        const feeCollectorTrimmed = feeCollector ? feeCollector.trim() : null;
+
+        const filteredVouchers = vouchers.filter((voucher) => {
+          const months = Array.isArray(voucher.months) ? voucher.months : [];
+          const paidOrPartialMonths = months.filter((month) => ['paid', 'partial'].includes(month.status));
+
+          const monthMatches = paidOrPartialMonths.some((month) => {
+            // Check if date is in range
+            const dateInRange = isDateInRange(month.createdAt) || isDateInRange(month.date) ||
+              (Array.isArray(month.paymentHistory) && month.paymentHistory.some((entry) => isDateInRange(entry?.date)));
+            
+            if (!dateInRange) return false;
+            
+            // If feeCollector filter is provided, also check receivedBy
+            if (feeCollectorTrimmed) {
+              const monthReceivedBy = month.receivedBy || '';
+              const paymentHistoryReceivedBy = Array.isArray(month.paymentHistory) 
+                ? month.paymentHistory.map((p) => p.receivedBy || '').filter(Boolean)
+                : [];
+              
+              const monthMatchesReceivedBy = monthReceivedBy && 
+                new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(monthReceivedBy);
+              const historyMatchesReceivedBy = paymentHistoryReceivedBy.some((rb) => 
+                new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(rb)
+              );
+              
+              return monthMatchesReceivedBy || historyMatchesReceivedBy;
+            }
+            
+            return true;
+          });
+
+          if (monthMatches) {
+            // Calculate total collection from matched months
+            paidOrPartialMonths.forEach((month) => {
+              const dateInRange = isDateInRange(month.createdAt) || isDateInRange(month.date) ||
+                (Array.isArray(month.paymentHistory) && month.paymentHistory.some((entry) => isDateInRange(entry?.date)));
+              
+              if (dateInRange) {
+                // Check feeCollector filter if provided
+                if (feeCollectorTrimmed) {
+                  const monthReceivedBy = month.receivedBy || '';
+                  const paymentHistoryReceivedBy = Array.isArray(month.paymentHistory) 
+                    ? month.paymentHistory.map((p) => p.receivedBy || '').filter(Boolean)
+                    : [];
+                  
+                  const monthMatchesReceivedBy = monthReceivedBy && 
+                    new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(monthReceivedBy);
+                  const historyMatchesReceivedBy = paymentHistoryReceivedBy.some((rb) => 
+                    new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(rb)
+                  );
+                  
+                  if (monthMatchesReceivedBy || historyMatchesReceivedBy) {
+                    totalCollectionAmount += (month.paidAmount || month.packageFee || 0);
+                  }
+                } else {
+                  totalCollectionAmount += (month.paidAmount || month.packageFee || 0);
+                }
+              }
+            });
+            return true;
+          }
+
+          const topLevelMatch = (isDateInRange(voucher.createdAt) || isDateInRange(voucher.updatedAt));
+          return topLevelMatch && paidOrPartialMonths.length > 0;
+        });
+
+        console.log(`📊 Query result: Found ${filteredVouchers.length} vouchers in date range ${fromDate} to ${toDate}${feeCollectorTrimmed ? ` (filtered by receivedBy: ${feeCollectorTrimmed})` : ''}`);
+        console.log(`💰 Total collection amount: Rs ${totalCollectionAmount}`);
+        
+        userIds = filteredVouchers.map(v => v.userId);
+        console.log(`Found ${userIds.length} user(s) with paid/partial activity in date range`);
+      } else {
+        console.log(`⚠️ Invalid date range received: ${fromDate} to ${toDate}`);
+      }
+    }
+    // Fallback to single date filter for backward compatibility
+    else if (paymentDate) {
       const [yearStr, monthStr, dayStr] = paymentDate.split('-');
       const year = parseInt(yearStr, 10);
       const month = parseInt(monthStr, 10) - 1; // JS Date month is 0-indexed
@@ -2243,6 +2391,7 @@ app.get('/api/users/paid', async (req, res) => {
       success: true,
       data: users,
       totalCount,
+      totalCollectionAmount, // Total collection for date range filter
       page,
       limit
     });
