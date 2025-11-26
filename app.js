@@ -2268,10 +2268,24 @@ app.get('/api/users/unpaid', async (req, res) => {
     const feeCollector = req.query.feeCollector; // Fee collector name filter
     const assignTo = req.query.assignTo; // Technician assignment filter
     
-    // CRITICAL: Simple logic - show ONLY users with status 'unpaid'
-    // No need to check vouchers - user status is the source of truth
+    // CRITICAL: Check vouchers for unpaid months instead of relying on user-level status
+    // This ensures users with any unpaid months are included
     
-    // Base query - active users only, ONLY show users with status 'unpaid'
+    // First, find all vouchers that have at least one unpaid month (not refunded)
+    const vouchersWithUnpaidMonths = await vouchersCollection.find({
+      'months': { $elemMatch: { status: 'unpaid', refundDate: { $exists: false }, refundedAmount: { $exists: false } } }
+    }).project({ userId: 1 }).toArray();
+    
+    const userIdsWithUnpaidMonths = [...new Set(vouchersWithUnpaidMonths.map(v => v.userId))];
+    console.log(`📊 Found ${userIdsWithUnpaidMonths.length} users with unpaid months in vouchers`);
+    
+    // If no users have unpaid months, return empty result
+    if (userIdsWithUnpaidMonths.length === 0) {
+      console.log(`ℹ️ No users with unpaid months found`);
+      return res.status(200).json({ success: true, data: [], totalCount: 0, page, limit });
+    }
+    
+    // Base query - active users only, with unpaid months in their vouchers
     let query = {
       $and: [
         {
@@ -2280,12 +2294,12 @@ app.get('/api/users/unpaid', async (req, res) => {
             { serviceStatus: { $exists: false } }
           ]
         },
-        // CRITICAL: Only show users with status 'unpaid' (exclude 'partial' and 'paid')
-        { status: 'unpaid' }
+        // Include users who have unpaid months in vouchers
+        { _id: { $in: userIdsWithUnpaidMonths.map(id => new ObjectId(id)) } }
       ]
     };
     
-    console.log(`📊 Unpaid query: Fetching users with status='unpaid'`);
+    console.log(`📊 Unpaid query: Fetching ${userIdsWithUnpaidMonths.length} users with unpaid voucher months`);
     
     // STRICT: Filter by fee collector if provided (case-insensitive) - ALWAYS apply
     if (feeCollector) {
@@ -2437,17 +2451,10 @@ app.get('/api/users/unpaid', async (req, res) => {
       .limit(limit)
       .toArray();
     
-    // CRITICAL: Final safety check - filter out any users with status 'partial' that might have slipped through
-    const finalFilteredUsers = users.filter(u => {
-      const userStatus = u.status || 'unpaid';
-      if (userStatus === 'partial') {
-        console.log(`⚠️ WARNING: User ${u.userName} (${u._id}) has status 'partial' but was returned by unpaid query - filtering out`);
-        return false;
-      }
-      return true;
-    });
+    // No need for final filter - we already filtered by vouchers with unpaid months
+    const finalFilteredUsers = users;
     
-    console.log(`Unpaid users: ${finalFilteredUsers.length} found (${users.length} before final filter), ${totalCount} total`);
+    console.log(`Unpaid users: ${finalFilteredUsers.length} found, ${totalCount} total`);
     if (feeCollector || assignTo) {
       console.log(`🔒 Filtered users - feeCollector: ${feeCollector || 'none'}, assignTo: ${assignTo || 'none'}`);
       finalFilteredUsers.forEach(u => {
