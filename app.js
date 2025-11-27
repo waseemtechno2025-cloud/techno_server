@@ -2240,6 +2240,16 @@ app.get('/api/users/paid', async (req, res) => {
       const userIdsWithPaidMonths = new Set();
       const feeCollectorTrimmed = feeCollector ? feeCollector.trim() : null;
       
+      // FALLBACK: Get users assigned to this feeCollector for old payments
+      let usersAssignedToFeeCollector = new Set();
+      if (feeCollectorTrimmed) {
+        const assignedUsers = await usersCollection.find({
+          feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+        }).toArray();
+        assignedUsers.forEach(u => usersAssignedToFeeCollector.add(u._id.toString()));
+        console.log(`📋 Found ${usersAssignedToFeeCollector.size} users assigned to ${feeCollectorTrimmed}`);
+      }
+      
       allVouchers.forEach(voucher => {
         if (Array.isArray(voucher.months)) {
           // Check if voucher has paid months
@@ -2263,6 +2273,36 @@ app.get('/api/users/paid', async (req, res) => {
               const historyMatches = paymentHistoryReceivedBy.some((rb) => 
                 new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(rb)
               );
+              
+              // FALLBACK: For old payments where receivedBy is empty or "Myself" or "Admin"
+              // Check if this user is assigned to the feeCollector
+              // This ensures old data still works while new payments use receivedBy
+              const hasReceivedBy = monthReceivedBy && monthReceivedBy !== '';
+              const receivedByIsOldValue = monthReceivedBy === 'Myself' || monthReceivedBy === 'Admin';
+              
+              if (!hasReceivedBy || receivedByIsOldValue) {
+                // No receivedBy or old value - fall back to checking if user is assigned to feeCollector
+                // This maintains backward compatibility with old payments
+                const userIsAssigned = usersAssignedToFeeCollector.has(voucher.userId.toString());
+                
+                if (userIdsWithPaidMonths.size < 3) {
+                  console.log(`\n🔍 Fallback check for user ${voucher.userId}:`);
+                  console.log(`   receivedBy: "${monthReceivedBy}" (${!hasReceivedBy ? 'empty' : 'old value'})`);
+                  console.log(`   User assigned to ${feeCollectorTrimmed}? ${userIsAssigned}`);
+                }
+                
+                return userIsAssigned;
+              }
+              
+              // Debug logging for first few vouchers
+              if (userIdsWithPaidMonths.size < 3) {
+                console.log(`\n🔍 Checking voucher for user ${voucher.userId}:`);
+                console.log(`   Month: ${m.month}, Status: ${m.status}, Paid: ${m.paidAmount}`);
+                console.log(`   month.receivedBy: "${monthReceivedBy}"`);
+                console.log(`   paymentHistory: ${paymentHistoryReceivedBy.length > 0 ? paymentHistoryReceivedBy.join(', ') : 'None'}`);
+                console.log(`   Looking for: "${feeCollectorTrimmed}"`);
+                console.log(`   monthMatches: ${monthMatches}, historyMatches: ${historyMatches}`);
+              }
               
               return monthMatches || historyMatches;
             }
