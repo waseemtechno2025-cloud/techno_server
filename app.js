@@ -4739,6 +4739,54 @@ app.post('/api/routers', async (req, res) => {
   }
 });
 
+// UPDATE a router
+app.put('/api/routers/:id', async (req, res) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid router ID format'
+      });
+    }
+
+    const { brand, model, quantity, price, purchasePrice, supplier, purchaseDate, status } = req.body;
+
+    const updateData = {};
+    if (brand !== undefined) updateData.brand = brand.trim();
+    if (model !== undefined) updateData.model = model.trim();
+    if (quantity !== undefined) updateData.quantity = parseInt(quantity);
+    if (price !== undefined) updateData.price = parseFloat(price);
+    if (purchasePrice !== undefined) updateData.purchasePrice = parseFloat(purchasePrice);
+    if (supplier !== undefined) updateData.supplier = supplier.trim();
+    if (purchaseDate !== undefined) updateData.purchaseDate = purchaseDate;
+    if (status !== undefined) updateData.status = status;
+
+    const result = await routersCollection.updateOne(
+      { _id: new ObjectId(req.params.id) },
+      { $set: updateData }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Router not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Router updated successfully'
+    });
+  } catch (error) {
+    console.error('Error updating router:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error updating router',
+      error: error.message
+    });
+  }
+});
+
 // DELETE a router
 app.delete('/api/routers/:id', async (req, res) => {
   try {
@@ -5000,6 +5048,53 @@ app.post('/api/fiber-cables', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error adding fiber cable',
+      error: error.message
+    });
+  }
+});
+
+// UPDATE a fiber cable
+app.put('/api/fiber-cables/:id', async (req, res) => {
+  try {
+    if (!ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid fiber cable ID format'
+      });
+    }
+
+    const { type, length, pricePerMeter, purchasePricePerMeter, purchaseDate, supplier, status } = req.body;
+
+    const updateData = {};
+    if (type !== undefined) updateData.type = type.trim();
+    if (length !== undefined) updateData.length = parseFloat(length);
+    if (pricePerMeter !== undefined) updateData.pricePerMeter = parseFloat(pricePerMeter);
+    if (purchasePricePerMeter !== undefined) updateData.purchasePricePerMeter = parseFloat(purchasePricePerMeter);
+    if (purchaseDate !== undefined) updateData.purchaseDate = purchaseDate;
+    if (supplier !== undefined) updateData.supplier = supplier.trim();
+    if (status !== undefined) updateData.status = status;
+
+    const result = await fiberCablesCollection.updateOne(
+      { _id: new ObjectId(req.params.id) },
+      { $set: updateData }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Fiber cable not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Fiber cable updated successfully'
+    });
+  } catch (error) {
+    console.error('Error updating fiber cable:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error updating fiber cable',
       error: error.message
     });
   }
