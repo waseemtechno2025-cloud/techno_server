@@ -4749,11 +4749,13 @@ app.put('/api/routers/:id', async (req, res) => {
       });
     }
 
-    const { brand, model, quantity, price, purchasePrice, supplier, purchaseDate, status } = req.body;
+    const { brand, model, quantity, availableStock, price, purchasePrice, supplier, purchaseDate, status } = req.body;
 
     const updateData = {};
     if (brand !== undefined) updateData.brand = brand.trim();
     if (model !== undefined) updateData.model = model.trim();
+    // If availableStock is provided, use the total quantity from frontend
+    // Otherwise use the quantity directly
     if (quantity !== undefined) updateData.quantity = parseInt(quantity);
     if (price !== undefined) updateData.price = parseFloat(price);
     if (purchasePrice !== undefined) updateData.purchasePrice = parseFloat(purchasePrice);
@@ -5063,10 +5065,12 @@ app.put('/api/fiber-cables/:id', async (req, res) => {
       });
     }
 
-    const { type, length, pricePerMeter, purchasePricePerMeter, purchaseDate, supplier, status } = req.body;
+    const { type, length, availableStock, pricePerMeter, purchasePricePerMeter, purchaseDate, supplier, status } = req.body;
 
     const updateData = {};
     if (type !== undefined) updateData.type = type.trim();
+    // If availableStock is provided, use the total length from frontend
+    // Otherwise use the length directly
     if (length !== undefined) updateData.length = parseFloat(length);
     if (pricePerMeter !== undefined) updateData.pricePerMeter = parseFloat(pricePerMeter);
     if (purchasePricePerMeter !== undefined) updateData.purchasePricePerMeter = parseFloat(purchasePricePerMeter);
