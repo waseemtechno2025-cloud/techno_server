@@ -26,6 +26,7 @@ let fiberCablesCollection;
 let vouchersCollection;
 let transactionsCollection;
 let expensesCollection;
+let monthlySalesCollection;
 let isConnected = false;
 let client;
 
@@ -68,6 +69,7 @@ async function connectToDatabase() {
     vouchersCollection = db.collection('vouchers');
     transactionsCollection = db.collection('transactions');
     expensesCollection = db.collection('expenses');
+    monthlySalesCollection = db.collection('monthlySales');
     
     console.log('Collections initialized:', {
       streets: !!streetsCollection,
@@ -80,7 +82,8 @@ async function connectToDatabase() {
       fiberCables: !!fiberCablesCollection,
       vouchers: !!vouchersCollection,
       transactions: !!transactionsCollection,
-      expenses: !!expensesCollection
+      expenses: !!expensesCollection,
+      monthlySales: !!monthlySalesCollection
     });
     
     // Create unique index on name field
@@ -4874,6 +4877,31 @@ app.post('/api/routers/:id/sell', async (req, res) => {
       }
     );
 
+    // Update monthly sales
+    const now = new Date();
+    const pktDate = new Date(now.getTime() + (PKT_OFFSET_MIN * 60000));
+    const currentMonth = pktDate.getMonth() + 1;
+    const currentYear = pktDate.getFullYear();
+    const monthKey = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
+    
+    const saleAmount = parseInt(quantity) * parseFloat(saleRecord.sellingPrice);
+    
+    await monthlySalesCollection.updateOne(
+      { monthKey: monthKey },
+      {
+        $inc: {
+          totalSales: saleAmount,
+          routerSales: saleAmount
+        },
+        $set: {
+          month: currentMonth,
+          year: currentYear,
+          lastUpdated: new Date().toISOString()
+        }
+      },
+      { upsert: true }
+    );
+
     res.status(200).json({
       success: true,
       message: 'Router sold successfully',
@@ -5189,6 +5217,31 @@ app.post('/api/fiber-cables/:id/sell', async (req, res) => {
       }
     );
 
+    // Update monthly sales
+    const now = new Date();
+    const pktDate = new Date(now.getTime() + (PKT_OFFSET_MIN * 60000));
+    const currentMonth = pktDate.getMonth() + 1;
+    const currentYear = pktDate.getFullYear();
+    const monthKey = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
+    
+    const saleAmount = parseFloat(length) * parseFloat(saleRecord.sellingPricePerMeter);
+    
+    await monthlySalesCollection.updateOne(
+      { monthKey: monthKey },
+      {
+        $inc: {
+          totalSales: saleAmount,
+          cableSales: saleAmount
+        },
+        $set: {
+          month: currentMonth,
+          year: currentYear,
+          lastUpdated: new Date().toISOString()
+        }
+      },
+      { upsert: true }
+    );
+
     res.status(200).json({
       success: true,
       message: 'Fiber cable sold successfully',
@@ -5306,39 +5359,24 @@ app.get('/api/fiber-cables/sales-report', async (req, res) => {
 // ============ TOTAL SALES API ROUTE ============
 
 // GET total sales from routers and fiber cables
+// Get current month's total sales
 app.get('/api/sales/total', async (req, res) => {
   try {
-    // Get all routers with sales
-    const routers = await routersCollection.find({
-      quantitySold: { $gt: 0 }
-    }).toArray();
+    // Get current month and year in PKT
+    const now = new Date();
+    const pktDate = new Date(now.getTime() + (PKT_OFFSET_MIN * 60000));
+    const currentMonth = pktDate.getMonth() + 1; // 1-12
+    const currentYear = pktDate.getFullYear();
+    const monthKey = `${currentYear}-${String(currentMonth).padStart(2, '0')}`; // e.g., "2024-12"
     
-    // Calculate router sales
-    let routerSales = 0;
-    routers.forEach(router => {
-      if (router.salesHistory && router.salesHistory.length > 0) {
-        router.salesHistory.forEach(sale => {
-          routerSales += sale.quantity * sale.sellingPrice;
-        });
-      }
+    // Get monthly sales record
+    const monthlySales = await monthlySalesCollection.findOne({
+      monthKey: monthKey
     });
     
-    // Get all fiber cables with sales
-    const cables = await fiberCablesCollection.find({
-      lengthSold: { $gt: 0 }
-    }).toArray();
-    
-    // Calculate fiber cable sales
-    let cableSales = 0;
-    cables.forEach(cable => {
-      if (cable.salesHistory && cable.salesHistory.length > 0) {
-        cable.salesHistory.forEach(sale => {
-          cableSales += sale.length * sale.sellingPricePerMeter;
-        });
-      }
-    });
-    
-    const totalSales = routerSales + cableSales;
+    const totalSales = monthlySales ? monthlySales.totalSales : 0;
+    const routerSales = monthlySales ? monthlySales.routerSales : 0;
+    const cableSales = monthlySales ? monthlySales.cableSales : 0;
     
     res.status(200).json({
       success: true,
@@ -5349,7 +5387,8 @@ app.get('/api/sales/total', async (req, res) => {
         breakdown: {
           routers: routerSales,
           fiberCables: cableSales
-        }
+        },
+        month: monthKey
       }
     });
   } catch (error) {
@@ -5357,6 +5396,28 @@ app.get('/api/sales/total', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error fetching total sales',
+      error: error.message
+    });
+  }
+});
+
+// Get sales history by month
+app.get('/api/sales/history', async (req, res) => {
+  try {
+    const history = await monthlySalesCollection.find({})
+      .sort({ year: -1, month: -1 })
+      .limit(12)
+      .toArray();
+    
+    res.status(200).json({
+      success: true,
+      data: history
+    });
+  } catch (error) {
+    console.error('Error fetching sales history:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching sales history',
       error: error.message
     });
   }
