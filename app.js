@@ -6658,6 +6658,9 @@ app.post('/api/collections/transfer', ensureDbConnection, async (req, res) => {
   try {
     const { feeCollector, amount, message } = req.body;
     
+    console.log('🔵 ===== TRANSFER API CALLED =====');
+    console.log('🔵 Request body:', { feeCollector, amount, message });
+    
     if (!feeCollector || !amount) {
       return res.status(400).json({
         success: false,
@@ -6672,6 +6675,8 @@ app.post('/api/collections/transfer', ensureDbConnection, async (req, res) => {
         message: 'Invalid amount'
       });
     }
+    
+    console.log('🔵 Processing transfer: Fee Collector =', feeCollector.trim(), '| Amount = Rs', transferAmount);
     
     // Check if fee collector has enough income to transfer
     const feeCollectorIncome = await incomesCollection.findOne({ name: feeCollector.trim() });
@@ -6746,9 +6751,11 @@ app.post('/api/collections/transfer', ensureDbConnection, async (req, res) => {
     
     // 💰 UPDATE INCOME: Decrease fee collector's income and increase Admin's income
     // First, ensure the fee collector has an income record
+    console.log('🔍 Searching for fee collector income record:', feeCollector.trim());
     const feeCollectorIncomeRecord = await incomesCollection.findOne({ 
       name: { $regex: new RegExp(`^${feeCollector.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } 
     });
+    console.log('🔍 Fee collector income record found:', feeCollectorIncomeRecord ? `Yes (Current income: Rs${feeCollectorIncomeRecord.totalIncome})` : 'No');
     
     if (feeCollectorIncomeRecord) {
       // Update existing fee collector income
