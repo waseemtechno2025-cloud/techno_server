@@ -6745,17 +6745,38 @@ app.post('/api/collections/transfer', ensureDbConnection, async (req, res) => {
     const result = await collectionsCollection.insertOne(transferRecord);
     
     // 💰 UPDATE INCOME: Decrease fee collector's income and increase Admin's income
-    await incomesCollection.updateOne(
-      { name: feeCollector.trim() },
-      { 
-        $inc: { totalIncome: -transferAmount },
-        $set: { lastUpdated: new Date() }
-      }
-    );
-    console.log(`💰 Income decreased: ${feeCollector} -Rs${transferAmount}`);
+    // First, ensure the fee collector has an income record
+    const feeCollectorIncomeRecord = await incomesCollection.findOne({ 
+      name: { $regex: new RegExp(`^${feeCollector.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } 
+    });
     
-    await incomesCollection.updateOne(
-      { name: 'Admin' },
+    if (feeCollectorIncomeRecord) {
+      // Update existing fee collector income
+      const updateResult = await incomesCollection.updateOne(
+        { name: { $regex: new RegExp(`^${feeCollector.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+        { 
+          $inc: { totalIncome: -transferAmount },
+          $set: { lastUpdated: new Date() }
+        }
+      );
+      console.log(`💰 Income decreased: ${feeCollector} -Rs${transferAmount} (matched: ${updateResult.matchedCount}, modified: ${updateResult.modifiedCount})`);
+    } else {
+      console.log(`⚠️ Warning: ${feeCollector} has no income record in incomes collection. Creating one with negative balance.`);
+      // Create a new record with negative balance
+      await incomesCollection.insertOne({
+        name: feeCollector.trim(),
+        totalIncome: -transferAmount,
+        cashIncome: 0,
+        bankIncome: 0,
+        createdAt: new Date(),
+        lastUpdated: new Date()
+      });
+      console.log(`💰 Created income record for ${feeCollector} with -Rs${transferAmount}`);
+    }
+    
+    // Update or create Admin income
+    const adminUpdateResult = await incomesCollection.updateOne(
+      { name: { $regex: new RegExp(`^Admin$`, 'i') } },
       { 
         $inc: { totalIncome: transferAmount },
         $set: { lastUpdated: new Date() },
@@ -6763,7 +6784,7 @@ app.post('/api/collections/transfer', ensureDbConnection, async (req, res) => {
       },
       { upsert: true }
     );
-    console.log(`💰 Income increased: Admin +Rs${transferAmount}`);
+    console.log(`💰 Income increased: Admin +Rs${transferAmount} (matched: ${adminUpdateResult.matchedCount}, modified: ${adminUpdateResult.modifiedCount}, upserted: ${adminUpdateResult.upsertedId || 'none'})`);
     
     // 📝 SAVE TRANSACTION: Store in transactions collection
     try {
