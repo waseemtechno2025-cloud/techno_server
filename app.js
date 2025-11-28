@@ -1709,6 +1709,8 @@ app.get('/api/dashboard/stats', async (req, res) => {
     // Total income - CRITICAL: Calculate from vouchers based on receivedBy if feeCollector filter is provided
     // This ensures income matches what fee collector actually received
     let totalIncome = 0;
+    let cashIncome = 0;
+    let bankIncome = 0;
     const feeCollectorTrimmed = feeCollector ? feeCollector.trim() : null;
     
     if (feeCollectorTrimmed) {
@@ -1717,8 +1719,6 @@ app.get('/api/dashboard/stats', async (req, res) => {
       
       const allVouchersForIncome = await vouchersCol.find({}).toArray();
       let incomeFromVouchers = 0;
-      let cashIncome = 0;
-      let bankIncome = 0;
       
       allVouchersForIncome.forEach(voucher => {
         if (Array.isArray(voucher.months)) {
@@ -1782,8 +1782,6 @@ app.get('/api/dashboard/stats', async (req, res) => {
       
       const allVouchersForIncome = await vouchersCol.find({}).toArray();
       let incomeFromVouchers = 0;
-      let cashIncome = 0;
-      let bankIncome = 0;
       
       allVouchersForIncome.forEach(voucher => {
         if (Array.isArray(voucher.months)) {
