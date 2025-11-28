@@ -6749,7 +6749,7 @@ app.post('/api/collections/transfer', ensureDbConnection, async (req, res) => {
       { name: feeCollector.trim() },
       { 
         $inc: { totalIncome: -transferAmount },
-        $set: { updatedAt: new Date() }
+        $set: { lastUpdated: new Date() }
       }
     );
     console.log(`💰 Income decreased: ${feeCollector} -Rs${transferAmount}`);
@@ -6758,12 +6758,31 @@ app.post('/api/collections/transfer', ensureDbConnection, async (req, res) => {
       { name: 'Admin' },
       { 
         $inc: { totalIncome: transferAmount },
-        $set: { updatedAt: new Date() },
-        $setOnInsert: { name: 'Admin', createdAt: new Date() }
+        $set: { lastUpdated: new Date() },
+        $setOnInsert: { name: 'Admin', createdAt: new Date(), cashIncome: 0, bankIncome: 0 }
       },
       { upsert: true }
     );
     console.log(`💰 Income increased: Admin +Rs${transferAmount}`);
+    
+    // 📝 SAVE TRANSACTION: Store in transactions collection
+    try {
+      const transactionRecord = {
+        type: 'transfer',
+        from: feeCollector.trim(),
+        to: 'Admin',
+        amount: transferAmount,
+        description: message ? message.trim() : `Transfer from ${feeCollector.trim()} to Admin`,
+        date: new Date(),
+        createdAt: new Date()
+      };
+      
+      await transactionsCollection.insertOne(transactionRecord);
+      console.log(`📝 Transaction saved: ${feeCollector} -> Admin Rs${transferAmount}`);
+    } catch (transactionError) {
+      console.error('❌ Error saving transaction:', transactionError);
+      // Don't fail the request if transaction save fails, just log the error
+    }
     
     console.log(`💰 Transfer recorded: ${feeCollector} transferred Rs ${transferAmount}`);
     
