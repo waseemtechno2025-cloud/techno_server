@@ -1978,6 +1978,79 @@ app.get('/api/dashboard/stats', async (req, res) => {
     const outstanding = Number(unpaidTotal) + Number(partialTotal); // Total from voucher-based calculation
     const balanceCustomers = partialUsers.length;
     
+    // 💰 SAVE/UPDATE INCOME IN incomes COLLECTION
+    // Jab bhi admin ya fee collector dashboard par land kare, unki income automatically save/update ho
+    try {
+      if (feeCollectorTrimmed) {
+        // Fee Collector ki income save/update karein
+        const existingIncome = await incomesCollection.findOne({ 
+          name: { $regex: new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } 
+        });
+        
+        if (existingIncome) {
+          // Update existing income
+          await incomesCollection.updateOne(
+            { name: { $regex: new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+            { 
+              $set: { 
+                totalIncome: totalIncome,
+                cashIncome: cashIncome || 0,
+                bankIncome: bankIncome || 0,
+                lastUpdated: new Date()
+              } 
+            }
+          );
+          console.log(`💰 Updated income for ${feeCollectorTrimmed}: Rs ${totalIncome} (Cash: ${cashIncome}, Bank: ${bankIncome})`);
+        } else {
+          // Create new income record
+          await incomesCollection.insertOne({
+            name: feeCollectorTrimmed,
+            totalIncome: totalIncome,
+            cashIncome: cashIncome || 0,
+            bankIncome: bankIncome || 0,
+            createdAt: new Date(),
+            lastUpdated: new Date()
+          });
+          console.log(`💰 Created new income record for ${feeCollectorTrimmed}: Rs ${totalIncome} (Cash: ${cashIncome}, Bank: ${bankIncome})`);
+        }
+      } else {
+        // Admin ki income save/update karein
+        const existingAdminIncome = await incomesCollection.findOne({ 
+          name: { $regex: new RegExp(`^Admin$`, 'i') } 
+        });
+        
+        if (existingAdminIncome) {
+          // Update existing admin income
+          await incomesCollection.updateOne(
+            { name: { $regex: new RegExp(`^Admin$`, 'i') } },
+            { 
+              $set: { 
+                totalIncome: totalIncome,
+                cashIncome: cashIncome || 0,
+                bankIncome: bankIncome || 0,
+                lastUpdated: new Date()
+              } 
+            }
+          );
+          console.log(`💰 Updated income for Admin: Rs ${totalIncome} (Cash: ${cashIncome}, Bank: ${bankIncome})`);
+        } else {
+          // Create new admin income record
+          await incomesCollection.insertOne({
+            name: 'Admin',
+            totalIncome: totalIncome,
+            cashIncome: cashIncome || 0,
+            bankIncome: bankIncome || 0,
+            createdAt: new Date(),
+            lastUpdated: new Date()
+          });
+          console.log(`💰 Created new income record for Admin: Rs ${totalIncome} (Cash: ${cashIncome}, Bank: ${bankIncome})`);
+        }
+      }
+    } catch (incomeError) {
+      console.error('❌ Error saving income to incomes collection:', incomeError);
+      // Don't fail the request if income save fails, just log the error
+    }
+    
     res.status(200).json({
       success: true,
       data: {
