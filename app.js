@@ -1776,9 +1776,9 @@ app.get('/api/dashboard/stats', async (req, res) => {
       console.log(`🏦 Bank income: Rs ${bankIncome}`);
     } else {
       // No feeCollector filter - Admin login
-      // CRITICAL: Admin ki income sirf "Admin" select karne par increase hogi
+      // CRITICAL: Admin ki income sirf "Admin" ya "Myself" select karne par increase hogi
       // Employee name select karne par admin ki income increase nahi hogi
-      console.log(`💰 Admin login - Calculating income from vouchers with receivedBy: "Admin"`);
+      console.log(`💰 Admin login - Calculating income from vouchers with receivedBy: "Admin" or "Myself"`);
       
       const allVouchersForIncome = await vouchersCol.find({}).toArray();
       let incomeFromVouchers = 0;
@@ -1786,7 +1786,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
       allVouchersForIncome.forEach(voucher => {
         if (Array.isArray(voucher.months)) {
           voucher.months.forEach(month => {
-            // Check if month has paid amount and receivedBy is "Admin"
+            // Check if month has paid amount and receivedBy is "Admin" or "Myself"
             const monthReceivedBy = month.receivedBy || '';
             const paymentHistory = Array.isArray(month.paymentHistory) ? month.paymentHistory : [];
             
@@ -1800,11 +1800,11 @@ app.get('/api/dashboard/stats', async (req, res) => {
     
             // CRITICAL: Always use paymentHistory for accurate income calculation
             // paymentHistory contains individual payments with their receivedBy values
-            // This prevents double-counting and ensures only payments made by "Admin" are counted
+            // This prevents double-counting and ensures only payments made by "Admin" or "Myself" are counted
             // IMPORTANT: We ONLY count from paymentHistory to avoid counting total paidAmount
             // which might include payments from other receivers (e.g., employee's 1000 + admin's 200 = 1200)
             if (paymentHistory.length > 0) {
-              // Use paymentHistory - only count payments where receivedBy is "Admin"
+              // Use paymentHistory - only count payments where receivedBy is "Admin" or "Myself"
               // This is the most accurate method as it tracks each individual payment
               let monthIncome = 0;
               paymentHistory.forEach((payment) => {
@@ -1812,7 +1812,12 @@ app.get('/api/dashboard/stats', async (req, res) => {
                 const paymentAmount = Number(payment.amount || 0);
                 const paymentMethodStr = (payment.paymentMethod || '').trim().toLowerCase();
                 
-                if (paymentReceivedBy && new RegExp(`^Admin$`, 'i').test(paymentReceivedBy.trim())) {
+                // Check for both "Admin" and "Myself"
+                const isAdminPayment = paymentReceivedBy && 
+                  (new RegExp(`^Admin$`, 'i').test(paymentReceivedBy.trim()) || 
+                   new RegExp(`^Myself$`, 'i').test(paymentReceivedBy.trim()));
+                
+                if (isAdminPayment) {
                   monthIncome += paymentAmount;
                   
                   // Separate by payment method
@@ -1824,7 +1829,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
                   
                   console.log(`   ✅ Counting payment from paymentHistory: Rs ${paymentAmount} (receivedBy: ${paymentReceivedBy}, method: ${payment.paymentMethod})`);
                 } else {
-                  console.log(`   ⏭️ Skipping payment: Rs ${paymentAmount} (receivedBy: ${paymentReceivedBy}, not "Admin")`);
+                  console.log(`   ⏭️ Skipping payment: Rs ${paymentAmount} (receivedBy: ${paymentReceivedBy}, not "Admin" or "Myself")`);
     }
               });
               incomeFromVouchers += monthIncome;
@@ -1843,7 +1848,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
       });
       
       totalIncome = incomeFromVouchers;
-      console.log(`💰 Admin total income from vouchers (receivedBy="Admin"): Rs ${totalIncome}`);
+      console.log(`💰 Admin total income from vouchers (receivedBy="Admin" or "Myself"): Rs ${totalIncome}`);
       console.log(`💵 Cash income: Rs ${cashIncome}`);
       console.log(`🏦 Bank income: Rs ${bankIncome}`);
       
