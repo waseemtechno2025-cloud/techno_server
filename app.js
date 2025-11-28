@@ -6641,7 +6641,45 @@ app.post('/api/collections/transfer', ensureDbConnection, async (req, res) => {
     
     // Check if fee collector has enough income to transfer
     const feeCollectorIncome = await incomesCollection.findOne({ name: feeCollector.trim() });
-    const currentIncome = feeCollectorIncome?.totalIncome || 0;
+    let currentIncome = feeCollectorIncome?.totalIncome || 0;
+    
+    // Fallback: If incomes collection is empty/not synced, calculate from vouchers
+    if (currentIncome === 0) {
+      console.log('⚠️ Incomes collection not synced, calculating from vouchers...');
+      const vouchers = await vouchersCollection.find({}).toArray();
+      
+      for (const voucher of vouchers) {
+        if (voucher.months && Array.isArray(voucher.months)) {
+          for (const month of voucher.months) {
+            if (month.status === 'paid' || month.status === 'partial') {
+              const paymentHistory = month.paymentHistory || [];
+              
+              if (paymentHistory.length > 0) {
+                for (const payment of paymentHistory) {
+                  if (payment.receivedBy && payment.receivedBy.toLowerCase() === feeCollector.trim().toLowerCase()) {
+                    currentIncome += Number(payment.amount || 0);
+                  }
+                }
+              } else if (month.receivedBy && month.receivedBy.toLowerCase() === feeCollector.trim().toLowerCase()) {
+                currentIncome += Number(month.paidAmount || 0);
+              }
+            }
+          }
+        }
+      }
+      
+      // Subtract transferred amounts
+      const collectionsCollection = db.collection('collections');
+      const transfers = await collectionsCollection.find({ 
+        feeCollector: { $regex: new RegExp(`^${feeCollector.trim()}$`, 'i') } 
+      }).toArray();
+      
+      for (const transfer of transfers) {
+        currentIncome -= Number(transfer.amount || 0);
+      }
+      
+      console.log(`💰 Calculated income from vouchers: Rs${currentIncome}`);
+    }
     
     if (currentIncome < transferAmount) {
       return res.status(400).json({
