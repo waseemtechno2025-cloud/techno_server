@@ -2119,21 +2119,8 @@ app.get('/api/users/paid', async (req, res) => {
               
               return monthMatchesReceivedBy || historyMatchesReceivedBy;
             } else {
-              // No fee collector filter (Admin) - show only payments where receivedBy is 'Admin' or 'Myself'
-              const monthReceivedBy = month.receivedBy || '';
-              const paymentHistoryReceivedBy = Array.isArray(month.paymentHistory) 
-                ? month.paymentHistory.map((p) => p.receivedBy || '').filter(Boolean)
-                : [];
-              
-              const monthMatchesAdmin = monthReceivedBy && 
-                (new RegExp(`^Admin$`, 'i').test(monthReceivedBy.trim()) || 
-                 new RegExp(`^Myself$`, 'i').test(monthReceivedBy.trim()));
-              const historyMatchesAdmin = paymentHistoryReceivedBy.some((rb) => 
-                new RegExp(`^Admin$`, 'i').test(rb.trim()) || 
-                new RegExp(`^Myself$`, 'i').test(rb.trim())
-              );
-              
-              return monthMatchesAdmin || historyMatchesAdmin;
+              // No fee collector filter (Admin) - show ALL paid/partial payments regardless of receivedBy
+              return true;
             }
           });
 
@@ -2271,21 +2258,8 @@ app.get('/api/users/paid', async (req, res) => {
               
               return monthMatchesReceivedBy || historyMatchesReceivedBy;
             } else {
-              // No fee collector filter (Admin) - show only payments where receivedBy is 'Admin' or 'Myself'
-              const monthReceivedBy = month.receivedBy || '';
-              const paymentHistoryReceivedBy = Array.isArray(month.paymentHistory) 
-                ? month.paymentHistory.map((p) => p.receivedBy || '').filter(Boolean)
-                : [];
-              
-              const monthMatchesAdmin = monthReceivedBy && 
-                (new RegExp(`^Admin$`, 'i').test(monthReceivedBy.trim()) || 
-                 new RegExp(`^Myself$`, 'i').test(monthReceivedBy.trim()));
-              const historyMatchesAdmin = paymentHistoryReceivedBy.some((rb) => 
-                new RegExp(`^Admin$`, 'i').test(rb.trim()) || 
-                new RegExp(`^Myself$`, 'i').test(rb.trim())
-              );
-              
-              return monthMatchesAdmin || historyMatchesAdmin;
+              // No fee collector filter (Admin) - show ALL paid/partial payments regardless of receivedBy
+              return true;
             }
           });
 
@@ -2386,21 +2360,8 @@ app.get('/api/users/paid', async (req, res) => {
               
               return monthMatches || historyMatches;
             } else {
-              // No fee collector filter (Admin) - show only payments where receivedBy is 'Admin' or 'Myself'
-              const monthReceivedBy = m.receivedBy || '';
-              const paymentHistoryReceivedBy = Array.isArray(m.paymentHistory) 
-                ? m.paymentHistory.map((p) => p.receivedBy || '').filter(Boolean)
-                : [];
-              
-              const monthMatchesAdmin = monthReceivedBy && 
-                (new RegExp(`^Admin$`, 'i').test(monthReceivedBy.trim()) || 
-                 new RegExp(`^Myself$`, 'i').test(monthReceivedBy.trim()));
-              const historyMatchesAdmin = paymentHistoryReceivedBy.some((rb) => 
-                new RegExp(`^Admin$`, 'i').test(rb.trim()) || 
-                new RegExp(`^Myself$`, 'i').test(rb.trim())
-              );
-              
-              return monthMatchesAdmin || historyMatchesAdmin;
+              // No fee collector filter (Admin) - show ALL paid/partial payments regardless of receivedBy
+              return true;
             }
           });
           
