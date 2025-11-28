@@ -29,6 +29,7 @@ let expensesCollection;
 let monthlySalesCollection;
 let complaintsCollection;
 let notificationsCollection;
+let incomesCollection;
 let isConnected = false;
 let client;
 
@@ -74,6 +75,7 @@ async function connectToDatabase() {
     monthlySalesCollection = db.collection('monthlySales');
     complaintsCollection = db.collection('complaints');
     notificationsCollection = db.collection('notifications');
+    incomesCollection = db.collection('incomes');
     
     console.log('Collections initialized:', {
       streets: !!streetsCollection,
@@ -89,7 +91,8 @@ async function connectToDatabase() {
       expenses: !!expensesCollection,
       monthlySales: !!monthlySalesCollection,
       complaints: !!complaintsCollection,
-      notifications: !!notificationsCollection
+      notifications: !!notificationsCollection,
+      incomes: !!incomesCollection
     });
     
     // Create unique index on name field
@@ -3766,6 +3769,52 @@ app.post('/api/vouchers', async (req, res) => {
           }
         );
         
+        // 💰 UPDATE INCOME: Process payments and update receiver's income
+        for (const month of sortedMonths) {
+          if (month.status === 'paid' || month.status === 'partial') {
+            // Check if month has paymentHistory (new structure) or receivedBy (old structure)
+            const paymentHistory = month.paymentHistory || [];
+            
+            if (paymentHistory.length > 0) {
+              // New structure: Process each payment in history
+              for (const payment of paymentHistory) {
+                const receiver = payment.receivedBy || 'Admin';
+                const amount = parseFloat(payment.amount) || 0;
+                
+                if (amount > 0) {
+                  await incomesCollection.updateOne(
+                    { name: receiver },
+                    { 
+                      $inc: { totalIncome: amount },
+                      $set: { updatedAt: new Date() },
+                      $setOnInsert: { name: receiver, createdAt: new Date() }
+                    },
+                    { upsert: true }
+                  );
+                  console.log(`💰 Income updated: ${receiver} +Rs${amount}`);
+                }
+              }
+            } else if (month.receivedBy) {
+              // Old structure: Single receivedBy field
+              const receiver = month.receivedBy;
+              const amount = parseFloat(month.paidAmount) || 0;
+              
+              if (amount > 0) {
+                await incomesCollection.updateOne(
+                  { name: receiver },
+                  { 
+                    $inc: { totalIncome: amount },
+                    $set: { updatedAt: new Date() },
+                    $setOnInsert: { name: receiver, createdAt: new Date() }
+                  },
+                  { upsert: true }
+                );
+                console.log(`💰 Income updated: ${receiver} +Rs${amount}`);
+              }
+            }
+          }
+        }
+        
         return res.status(200).json({
           success: true,
           message: 'Voucher updated with months array',
@@ -3783,6 +3832,52 @@ app.post('/api/vouchers', async (req, res) => {
         };
         
         const result = await vouchersCollection.insertOne(newVoucher);
+        
+        // 💰 UPDATE INCOME: Process payments and update receiver's income
+        for (const month of sortedMonths) {
+          if (month.status === 'paid' || month.status === 'partial') {
+            // Check if month has paymentHistory (new structure) or receivedBy (old structure)
+            const paymentHistory = month.paymentHistory || [];
+            
+            if (paymentHistory.length > 0) {
+              // New structure: Process each payment in history
+              for (const payment of paymentHistory) {
+                const receiver = payment.receivedBy || 'Admin';
+                const amount = parseFloat(payment.amount) || 0;
+                
+                if (amount > 0) {
+                  await incomesCollection.updateOne(
+                    { name: receiver },
+                    { 
+                      $inc: { totalIncome: amount },
+                      $set: { updatedAt: new Date() },
+                      $setOnInsert: { name: receiver, createdAt: new Date() }
+                    },
+                    { upsert: true }
+                  );
+                  console.log(`💰 Income updated: ${receiver} +Rs${amount}`);
+                }
+              }
+            } else if (month.receivedBy) {
+              // Old structure: Single receivedBy field
+              const receiver = month.receivedBy;
+              const amount = parseFloat(month.paidAmount) || 0;
+              
+              if (amount > 0) {
+                await incomesCollection.updateOne(
+                  { name: receiver },
+                  { 
+                    $inc: { totalIncome: amount },
+                    $set: { updatedAt: new Date() },
+                    $setOnInsert: { name: receiver, createdAt: new Date() }
+                  },
+                  { upsert: true }
+                );
+                console.log(`💰 Income updated: ${receiver} +Rs${amount}`);
+              }
+            }
+          }
+        }
         
         return res.status(201).json({
           success: true,
@@ -6544,6 +6639,17 @@ app.post('/api/collections/transfer', ensureDbConnection, async (req, res) => {
       });
     }
     
+    // Check if fee collector has enough income to transfer
+    const feeCollectorIncome = await incomesCollection.findOne({ name: feeCollector.trim() });
+    const currentIncome = feeCollectorIncome?.totalIncome || 0;
+    
+    if (currentIncome < transferAmount) {
+      return res.status(400).json({
+        success: false,
+        message: `Insufficient income. Available: Rs${currentIncome}, Requested: Rs${transferAmount}`
+      });
+    }
+    
     // Create or get collections collection
     let collectionsCollection = db.collection('collections');
     
@@ -6565,6 +6671,27 @@ app.post('/api/collections/transfer', ensureDbConnection, async (req, res) => {
     };
     
     const result = await collectionsCollection.insertOne(transferRecord);
+    
+    // 💰 UPDATE INCOME: Decrease fee collector's income and increase Admin's income
+    await incomesCollection.updateOne(
+      { name: feeCollector.trim() },
+      { 
+        $inc: { totalIncome: -transferAmount },
+        $set: { updatedAt: new Date() }
+      }
+    );
+    console.log(`💰 Income decreased: ${feeCollector} -Rs${transferAmount}`);
+    
+    await incomesCollection.updateOne(
+      { name: 'Admin' },
+      { 
+        $inc: { totalIncome: transferAmount },
+        $set: { updatedAt: new Date() },
+        $setOnInsert: { name: 'Admin', createdAt: new Date() }
+      },
+      { upsert: true }
+    );
+    console.log(`💰 Income increased: Admin +Rs${transferAmount}`);
     
     console.log(`💰 Transfer recorded: ${feeCollector} transferred Rs ${transferAmount}`);
     
@@ -6706,6 +6833,178 @@ app.get('/api/collections/transfers/history', ensureDbConnection, async (req, re
     res.status(500).json({
       success: false,
       message: 'Error fetching transfer history',
+      error: error.message
+    });
+  }
+});
+
+// ==================== INCOMES API ====================
+
+// GET all incomes
+app.get('/api/incomes', ensureDbConnection, async (req, res) => {
+  try {
+    const incomes = await incomesCollection.find({}).sort({ name: 1 }).toArray();
+    
+    res.status(200).json({
+      success: true,
+      data: incomes
+    });
+  } catch (error) {
+    console.error('Error fetching incomes:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching incomes',
+      error: error.message
+    });
+  }
+});
+
+// GET income for a specific person
+app.get('/api/incomes/:name', ensureDbConnection, async (req, res) => {
+  try {
+    const name = req.params.name;
+    const income = await incomesCollection.findOne({ name: name });
+    
+    if (!income) {
+      return res.status(404).json({
+        success: false,
+        message: 'Income record not found',
+        data: { name, totalIncome: 0 }
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      data: income
+    });
+  } catch (error) {
+    console.error('Error fetching income:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching income',
+      error: error.message
+    });
+  }
+});
+
+// POST - Sync incomes from existing vouchers (one-time initialization)
+app.post('/api/incomes/sync', ensureDbConnection, async (req, res) => {
+  try {
+    console.log('💰 Starting income sync from existing vouchers...');
+    
+    // Clear existing incomes (fresh start)
+    await incomesCollection.deleteMany({});
+    console.log('💰 Cleared existing incomes');
+    
+    // Get all vouchers
+    const vouchers = await vouchersCollection.find({}).toArray();
+    console.log(`💰 Found ${vouchers.length} vouchers to process`);
+    
+    let totalProcessed = 0;
+    const incomeMap = {}; // Temporary map to accumulate incomes
+    
+    // Process each voucher
+    for (const voucher of vouchers) {
+      if (voucher.months && Array.isArray(voucher.months)) {
+        for (const month of voucher.months) {
+          if (month.status === 'paid' || month.status === 'partial') {
+            const paymentHistory = month.paymentHistory || [];
+            
+            if (paymentHistory.length > 0) {
+              // New structure: Process each payment in history
+              for (const payment of paymentHistory) {
+                const receiver = payment.receivedBy || 'Admin';
+                const amount = parseFloat(payment.amount) || 0;
+                
+                if (amount > 0) {
+                  if (!incomeMap[receiver]) {
+                    incomeMap[receiver] = 0;
+                  }
+                  incomeMap[receiver] += amount;
+                  totalProcessed++;
+                }
+              }
+            } else if (month.receivedBy) {
+              // Old structure: Single receivedBy field
+              const receiver = month.receivedBy;
+              const amount = parseFloat(month.paidAmount) || 0;
+              
+              if (amount > 0) {
+                if (!incomeMap[receiver]) {
+                  incomeMap[receiver] = 0;
+                }
+                incomeMap[receiver] += amount;
+                totalProcessed++;
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    // Insert accumulated incomes into collection
+    const incomeRecords = Object.entries(incomeMap).map(([name, totalIncome]) => ({
+      name,
+      totalIncome,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    }));
+    
+    if (incomeRecords.length > 0) {
+      await incomesCollection.insertMany(incomeRecords);
+      console.log(`💰 Inserted ${incomeRecords.length} income records`);
+    }
+    
+    // Subtract transferred amounts from fee collectors
+    const collectionsCollection = db.collection('collections');
+    const transfers = await collectionsCollection.find({}).toArray();
+    
+    for (const transfer of transfers) {
+      const feeCollector = transfer.feeCollector?.trim();
+      const amount = Number(transfer.amount || 0);
+      
+      if (feeCollector && amount > 0) {
+        // Decrease fee collector's income
+        await incomesCollection.updateOne(
+          { name: feeCollector },
+          { 
+            $inc: { totalIncome: -amount },
+            $set: { updatedAt: new Date() }
+          }
+        );
+        
+        // Increase Admin's income
+        await incomesCollection.updateOne(
+          { name: 'Admin' },
+          { 
+            $inc: { totalIncome: amount },
+            $set: { updatedAt: new Date() },
+            $setOnInsert: { name: 'Admin', createdAt: new Date() }
+          },
+          { upsert: true }
+        );
+      }
+    }
+    
+    console.log(`💰 Processed ${transfers.length} transfers`);
+    
+    // Get final incomes
+    const finalIncomes = await incomesCollection.find({}).sort({ totalIncome: -1 }).toArray();
+    
+    res.status(200).json({
+      success: true,
+      message: 'Income sync completed successfully',
+      data: {
+        totalPaymentsProcessed: totalProcessed,
+        totalTransfersProcessed: transfers.length,
+        incomeRecords: finalIncomes
+      }
+    });
+  } catch (error) {
+    console.error('Error syncing incomes:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error syncing incomes',
       error: error.message
     });
   }
