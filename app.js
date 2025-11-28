@@ -6758,40 +6758,46 @@ app.post('/api/collections/transfer', ensureDbConnection, async (req, res) => {
     console.log('🔍 Fee collector income record found:', feeCollectorIncomeRecord ? `Yes (Current income: Rs${feeCollectorIncomeRecord.totalIncome})` : 'No');
     
     if (feeCollectorIncomeRecord) {
-      // Update existing fee collector income
+      // Update existing fee collector income - CUT from cashIncome AND totalIncome
       const updateResult = await incomesCollection.updateOne(
         { name: { $regex: new RegExp(`^${feeCollector.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
         { 
-          $inc: { totalIncome: -transferAmount },
+          $inc: { 
+            cashIncome: -transferAmount,  // Cash se cut karo
+            totalIncome: -transferAmount   // Total bhi update karo
+          },
           $set: { lastUpdated: new Date() }
         }
       );
-      console.log(`💰 Income decreased: ${feeCollector} -Rs${transferAmount} (matched: ${updateResult.matchedCount}, modified: ${updateResult.modifiedCount})`);
+      console.log(`💰 Income decreased: ${feeCollector} -Rs${transferAmount} from CASH (matched: ${updateResult.matchedCount}, modified: ${updateResult.modifiedCount})`);
     } else {
       console.log(`⚠️ Warning: ${feeCollector} has no income record in incomes collection. Creating one with negative balance.`);
       // Create a new record with negative balance
       await incomesCollection.insertOne({
         name: feeCollector.trim(),
         totalIncome: -transferAmount,
-        cashIncome: 0,
+        cashIncome: -transferAmount,  // Cash mein negative
         bankIncome: 0,
         createdAt: new Date(),
         lastUpdated: new Date()
       });
-      console.log(`💰 Created income record for ${feeCollector} with -Rs${transferAmount}`);
+      console.log(`💰 Created income record for ${feeCollector} with -Rs${transferAmount} in cash`);
     }
     
-    // Update or create Admin income
+    // Update or create Admin income - ADD to cashIncome AND totalIncome
     const adminUpdateResult = await incomesCollection.updateOne(
       { name: { $regex: new RegExp(`^Admin$`, 'i') } },
       { 
-        $inc: { totalIncome: transferAmount },
+        $inc: { 
+          cashIncome: transferAmount,   // Cash mein add karo
+          totalIncome: transferAmount    // Total bhi update karo
+        },
         $set: { lastUpdated: new Date() },
-        $setOnInsert: { name: 'Admin', createdAt: new Date(), cashIncome: 0, bankIncome: 0 }
+        $setOnInsert: { name: 'Admin', createdAt: new Date(), cashIncome: 0, bankIncome: 0, totalIncome: 0 }
       },
       { upsert: true }
     );
-    console.log(`💰 Income increased: Admin +Rs${transferAmount} (matched: ${adminUpdateResult.matchedCount}, modified: ${adminUpdateResult.modifiedCount}, upserted: ${adminUpdateResult.upsertedId || 'none'})`);
+    console.log(`💰 Income increased: Admin +Rs${transferAmount} in CASH (matched: ${adminUpdateResult.matchedCount}, modified: ${adminUpdateResult.modifiedCount}, upserted: ${adminUpdateResult.upsertedId || 'none'})`);
     
     // 📝 SAVE TRANSACTION: Store in transactions collection
     try {
