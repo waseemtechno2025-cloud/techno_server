@@ -27,6 +27,7 @@ let vouchersCollection;
 let transactionsCollection;
 let expensesCollection;
 let monthlySalesCollection;
+let complaintsCollection;
 let isConnected = false;
 let client;
 
@@ -70,6 +71,7 @@ async function connectToDatabase() {
     transactionsCollection = db.collection('transactions');
     expensesCollection = db.collection('expenses');
     monthlySalesCollection = db.collection('monthlySales');
+    complaintsCollection = db.collection('complaints');
     
     console.log('Collections initialized:', {
       streets: !!streetsCollection,
@@ -83,7 +85,8 @@ async function connectToDatabase() {
       vouchers: !!vouchersCollection,
       transactions: !!transactionsCollection,
       expenses: !!expensesCollection,
-      monthlySales: !!monthlySalesCollection
+      monthlySales: !!monthlySalesCollection,
+      complaints: !!complaintsCollection
     });
     
     // Create unique index on name field
@@ -6133,6 +6136,88 @@ app.post('/api/migrate/add-service-status', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Migration failed',
+      error: error.message
+    });
+  }
+});
+
+
+// PUT route to reopen a resolved complaint (Admin only)
+app.put('/api/complaints/:id/reopen', ensureDbConnection, async (req, res) => {
+  try {
+    console.log('?? Reopen complaint request:', req.params.id);
+    
+    const complaintId = req.params.id;
+    
+    if (!complaintId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Complaint ID is required'
+      });
+    }
+    
+    // Validate ObjectId format
+    if (!ObjectId.isValid(complaintId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid complaint ID format'
+      });
+    }
+
+    // Get complaint first to check current status
+    const complaint = await complaintsCollection.findOne(
+      { _id: new ObjectId(complaintId) }
+    );
+
+    if (!complaint) {
+      return res.status(404).json({
+        success: false,
+        message: 'Complaint not found'
+      });
+    }
+
+    // Check if complaint is already pending
+    if ((complaint.status || 'pending').toLowerCase() === 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: 'Complaint is already pending'
+      });
+    }
+
+    // Reopen complaint by changing status to pending
+    const result = await complaintsCollection.updateOne(
+      { _id: new ObjectId(complaintId) },
+      { 
+        $set: { 
+          status: 'pending',
+          reopenedAt: new Date()
+        } 
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Complaint not found'
+      });
+    }
+
+    console.log('? Complaint reopened successfully');
+    res.status(200).json({
+      success: true,
+      message: 'Complaint reopened successfully',
+      data: {
+        _id: complaintId,
+        status: 'pending',
+        reopenedAt: new Date()
+      }
+    });
+
+  } catch (error) {
+    console.error('? Error reopening complaint:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error reopening complaint',
       error: error.message
     });
   }
