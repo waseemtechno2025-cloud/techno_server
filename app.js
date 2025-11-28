@@ -6560,6 +6560,8 @@ app.get('/api/complaints', ensureDbConnection, async (req, res) => {
     const reportedBy = req.query.reportedBy; // Filter by who reported (fee collector name)
     const role = req.query.role; // User role: admin, fee collector, technician
     const search = req.query.search; // Search by name or phone number
+    const page = parseInt(req.query.page) || 1; // Page number (default: 1)
+    const limit = parseInt(req.query.limit) || 20; // Items per page (default: 20)
     
     const complaintsCollection = db.collection('complaints');
     
@@ -6575,22 +6577,31 @@ app.get('/api/complaints', ensureDbConnection, async (req, res) => {
     if (role === 'fee collector' && reportedBy) {
       query.reportedBy = { $regex: new RegExp(`^${reportedBy.trim()}$`, 'i') };
     }
-    // For admin: show all complaints (no reportedBy filter)
-    // For technician: show complaints assigned to them (already handled by technician filter)
     
-    // Get all complaints, sorted by date (newest first)
-    let complaints = await complaintsCollection.find(query).sort({ createdAt: -1 }).toArray();
-    
-    // Apply search filter if provided (search by userName, simNo, or whatsappNo)
+    // Apply search filter to query if provided
     if (search && search.trim() !== '') {
-      const searchTerm = search.trim().toLowerCase();
-      complaints = complaints.filter(complaint => {
-        const userName = (complaint.userName || '').toLowerCase();
-        const simNo = (complaint.simNo || '').toLowerCase();
-        const whatsappNo = (complaint.whatsappNo || '').toLowerCase();
-        return userName.includes(searchTerm) || simNo.includes(searchTerm) || whatsappNo.includes(searchTerm);
-      });
+      const searchTerm = search.trim();
+      query.$or = [
+        { userName: { $regex: searchTerm, $options: 'i' } },
+        { message: { $regex: searchTerm, $options: 'i' } },
+        { simNo: { $regex: searchTerm, $options: 'i' } },
+        { whatsappNo: { $regex: searchTerm, $options: 'i' } }
+      ];
     }
+    
+    // Calculate skip value for pagination
+    const skip = (page - 1) * limit;
+    
+    // Get total count for pagination
+    const totalCount = await complaintsCollection.countDocuments(query);
+    
+    // Get complaints with pagination, sorted by date (newest first)
+    const complaints = await complaintsCollection
+      .find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .toArray();
     
     // Format complaints
     const formattedComplaints = complaints.map((complaint) => ({
@@ -6610,7 +6621,11 @@ app.get('/api/complaints', ensureDbConnection, async (req, res) => {
     res.status(200).json({
       success: true,
       data: formattedComplaints,
-      count: formattedComplaints.length
+      count: formattedComplaints.length,
+      total: totalCount,
+      page: page,
+      totalPages: Math.ceil(totalCount / limit),
+      hasMore: skip + formattedComplaints.length < totalCount
     });
   } catch (error) {
     console.error('❌ Error fetching complaints:', error);
