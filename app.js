@@ -1717,6 +1717,8 @@ app.get('/api/dashboard/stats', async (req, res) => {
       
       const allVouchersForIncome = await vouchersCol.find({}).toArray();
       let incomeFromVouchers = 0;
+      let cashIncome = 0;
+      let bankIncome = 0;
       
       allVouchersForIncome.forEach(voucher => {
         if (Array.isArray(voucher.months)) {
@@ -1739,13 +1741,29 @@ app.get('/api/dashboard/stats', async (req, res) => {
                 paymentHistory.forEach((payment) => {
                   const paymentReceivedBy = payment.receivedBy || '';
                   if (paymentReceivedBy && new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(paymentReceivedBy)) {
-                    incomeFromVouchers += Number(payment.amount || 0);
+                    const amount = Number(payment.amount || 0);
+                    incomeFromVouchers += amount;
+                    
+                    // Separate by payment method
+                    const paymentMethodStr = (payment.paymentMethod || '').trim().toLowerCase();
+                    if (paymentMethodStr === 'cash') {
+                      cashIncome += amount;
+                    } else if (paymentMethodStr === 'bank transfer') {
+                      bankIncome += amount;
+                    }
     }
                 });
               } else if (monthMatchesReceivedBy) {
                 // No paymentHistory, but month.receivedBy matches - use month.paidAmount
                 const paidAmt = Number(month.paidAmount || 0);
                 incomeFromVouchers += paidAmt;
+                // If no paymentHistory, check month.paymentMethod
+                const monthMethod = (month.paymentMethod || '').trim().toLowerCase();
+                if (monthMethod === 'cash') {
+                  cashIncome += paidAmt;
+                } else if (monthMethod === 'bank transfer') {
+                  bankIncome += paidAmt;
+                }
               }
             }
           });
@@ -1754,6 +1772,8 @@ app.get('/api/dashboard/stats', async (req, res) => {
       
       totalIncome = incomeFromVouchers;
       console.log(`💰 Total income from vouchers (receivedBy=${feeCollectorTrimmed}): Rs ${totalIncome}`);
+      console.log(`💵 Cash income: Rs ${cashIncome}`);
+      console.log(`🏦 Bank income: Rs ${bankIncome}`);
     } else {
       // No feeCollector filter - Admin login
       // CRITICAL: Admin ki income sirf "Admin" select karne par increase hogi
@@ -1762,6 +1782,8 @@ app.get('/api/dashboard/stats', async (req, res) => {
       
       const allVouchersForIncome = await vouchersCol.find({}).toArray();
       let incomeFromVouchers = 0;
+      let cashIncome = 0;
+      let bankIncome = 0;
       
       allVouchersForIncome.forEach(voucher => {
         if (Array.isArray(voucher.months)) {
@@ -1775,7 +1797,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
             console.log(`   month.receivedBy: ${monthReceivedBy}`);
             console.log(`   paymentHistory.length: ${paymentHistory.length}`);
             if (paymentHistory.length > 0) {
-              console.log(`   paymentHistory entries:`, paymentHistory.map(p => `Rs ${p.amount} by ${p.receivedBy}`).join(', '));
+              console.log(`   paymentHistory entries:`, paymentHistory.map(p => `Rs ${p.amount} by ${p.receivedBy} (${p.paymentMethod})`).join(', '));
     }
     
             // CRITICAL: Always use paymentHistory for accurate income calculation
@@ -1790,9 +1812,19 @@ app.get('/api/dashboard/stats', async (req, res) => {
               paymentHistory.forEach((payment) => {
                 const paymentReceivedBy = payment.receivedBy || '';
                 const paymentAmount = Number(payment.amount || 0);
+                const paymentMethodStr = (payment.paymentMethod || '').trim().toLowerCase();
+                
                 if (paymentReceivedBy && new RegExp(`^Admin$`, 'i').test(paymentReceivedBy.trim())) {
                   monthIncome += paymentAmount;
-                  console.log(`   ✅ Counting payment from paymentHistory: Rs ${paymentAmount} (receivedBy: ${paymentReceivedBy})`);
+                  
+                  // Separate by payment method
+                  if (paymentMethodStr === 'cash') {
+                    cashIncome += paymentAmount;
+                  } else if (paymentMethodStr === 'bank transfer') {
+                    bankIncome += paymentAmount;
+                  }
+                  
+                  console.log(`   ✅ Counting payment from paymentHistory: Rs ${paymentAmount} (receivedBy: ${paymentReceivedBy}, method: ${payment.paymentMethod})`);
                 } else {
                   console.log(`   ⏭️ Skipping payment: Rs ${paymentAmount} (receivedBy: ${paymentReceivedBy}, not "Admin")`);
     }
@@ -1814,6 +1846,8 @@ app.get('/api/dashboard/stats', async (req, res) => {
       
       totalIncome = incomeFromVouchers;
       console.log(`💰 Admin total income from vouchers (receivedBy="Admin"): Rs ${totalIncome}`);
+      console.log(`💵 Cash income: Rs ${cashIncome}`);
+      console.log(`🏦 Bank income: Rs ${bankIncome}`);
       
       // CRITICAL: Add transfer amounts from fee collectors to admin income
       // When fee collectors transfer money to admin, it should be added to admin's total income
@@ -1938,6 +1972,8 @@ app.get('/api/dashboard/stats', async (req, res) => {
         totalUsers,
         paidUsers,
         totalIncome,
+        cashIncome: cashIncome || 0,
+        bankIncome: bankIncome || 0,
         totalExpense,
         unpaidUsers,
         outstanding,
