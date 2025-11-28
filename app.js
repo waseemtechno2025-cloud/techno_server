@@ -28,6 +28,7 @@ let transactionsCollection;
 let expensesCollection;
 let monthlySalesCollection;
 let complaintsCollection;
+let notificationsCollection;
 let isConnected = false;
 let client;
 
@@ -72,6 +73,7 @@ async function connectToDatabase() {
     expensesCollection = db.collection('expenses');
     monthlySalesCollection = db.collection('monthlySales');
     complaintsCollection = db.collection('complaints');
+    notificationsCollection = db.collection('notifications');
     
     console.log('Collections initialized:', {
       streets: !!streetsCollection,
@@ -86,7 +88,8 @@ async function connectToDatabase() {
       transactions: !!transactionsCollection,
       expenses: !!expensesCollection,
       monthlySales: !!monthlySalesCollection,
-      complaints: !!complaintsCollection
+      complaints: !!complaintsCollection,
+      notifications: !!notificationsCollection
     });
     
     // Create unique index on name field
@@ -6142,6 +6145,138 @@ app.post('/api/migrate/add-service-status', async (req, res) => {
 });
 
 
+// ============ NOTIFICATIONS API ROUTES ============
+
+// GET route to fetch all notifications for admin
+app.get('/api/notifications', ensureDbConnection, async (req, res) => {
+  try {
+    const { isRead } = req.query;
+    
+    let query = {};
+    
+    // Filter by read status if provided
+    if (isRead !== undefined) {
+      query.isRead = isRead === 'true';
+    }
+    
+    const notifications = await notificationsCollection
+      .find(query)
+      .sort({ createdAt: -1 })
+      .toArray();
+    
+    res.status(200).json({
+      success: true,
+      count: notifications.length,
+      data: notifications
+    });
+  } catch (error) {
+    console.error('Error fetching notifications:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching notifications',
+      error: error.message
+    });
+  }
+});
+
+// PUT route to mark notification as read
+app.put('/api/notifications/:id/read', ensureDbConnection, async (req, res) => {
+  try {
+    const notificationId = req.params.id;
+    
+    if (!ObjectId.isValid(notificationId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid notification ID format'
+      });
+    }
+    
+    const result = await notificationsCollection.updateOne(
+      { _id: new ObjectId(notificationId) },
+      { $set: { isRead: true, readAt: new Date() } }
+    );
+    
+    if (result.matchedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Notification not found'
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: 'Notification marked as read'
+    });
+  } catch (error) {
+    console.error('Error marking notification as read:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error marking notification as read',
+      error: error.message
+    });
+  }
+});
+
+// PUT route to mark all notifications as read
+app.put('/api/notifications/read-all', ensureDbConnection, async (req, res) => {
+  try {
+    const result = await notificationsCollection.updateMany(
+      { isRead: false },
+      { $set: { isRead: true, readAt: new Date() } }
+    );
+    
+    res.status(200).json({
+      success: true,
+      message: 'All notifications marked as read',
+      modifiedCount: result.modifiedCount
+    });
+  } catch (error) {
+    console.error('Error marking all notifications as read:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error marking all notifications as read',
+      error: error.message
+    });
+  }
+});
+
+// DELETE route to delete a notification
+app.delete('/api/notifications/:id', ensureDbConnection, async (req, res) => {
+  try {
+    const notificationId = req.params.id;
+    
+    if (!ObjectId.isValid(notificationId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid notification ID format'
+      });
+    }
+    
+    const result = await notificationsCollection.deleteOne(
+      { _id: new ObjectId(notificationId) }
+    );
+    
+    if (result.deletedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Notification not found'
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: 'Notification deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting notification:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error deleting notification',
+      error: error.message
+    });
+  }
+});
+
 // PUT route to reopen a resolved complaint (Admin only)
 app.put('/api/complaints/:id/reopen', ensureDbConnection, async (req, res) => {
   try {
@@ -6619,6 +6754,26 @@ app.post('/api/complaints', ensureDbConnection, async (req, res) => {
     
     console.log(`📝 Complaint created: ${userName} - ${message.substring(0, 50)}...`);
     
+    // Create notification for admin if complaint is not submitted by admin
+    if (reportedBy && reportedBy.toLowerCase() !== 'admin') {
+      try {
+        await notificationsCollection.insertOne({
+          type: 'new_complaint',
+          title: 'New Complaint Received',
+          message: `${reportedBy} submitted a complaint from ${userName}`,
+          complaintId: result.insertedId.toString(),
+          userName: userName.trim(),
+          complaintMessage: message.trim(),
+          submittedBy: reportedBy.trim(),
+          isRead: false,
+          createdAt: new Date()
+        });
+        console.log('✅ Notification created for admin');
+      } catch (notifError) {
+        console.error('Error creating notification:', notifError);
+      }
+    }
+    
     res.status(200).json({
       success: true,
       message: 'Complaint submitted successfully',
@@ -6795,6 +6950,9 @@ app.put('/api/complaints/:id/status', ensureDbConnection, async (req, res) => {
     
     const complaintsCollection = db.collection('complaints');
     
+    // Get complaint details first for notification
+    const complaint = await complaintsCollection.findOne({ _id: new ObjectId(complaintId) });
+    
     // Update complaint status
     const result = await complaintsCollection.updateOne(
       { _id: new ObjectId(complaintId) },
@@ -6811,6 +6969,26 @@ app.put('/api/complaints/:id/status', ensureDbConnection, async (req, res) => {
         success: false,
         message: 'Complaint not found'
       });
+    }
+    
+    // Create notification for admin if technician resolved the complaint
+    if (status.toLowerCase() === 'resolved' && complaint && complaint.reportedBy && complaint.reportedBy.toLowerCase() !== 'admin') {
+      try {
+        await notificationsCollection.insertOne({
+          type: 'complaint_resolved',
+          title: 'Complaint Resolved',
+          message: `${complaint.reportedBy} resolved complaint from ${complaint.userName}`,
+          complaintId: complaintId,
+          userName: complaint.userName,
+          complaintMessage: complaint.message,
+          resolvedBy: complaint.reportedBy,
+          isRead: false,
+          createdAt: new Date()
+        });
+        console.log('✅ Notification created for admin');
+      } catch (notifError) {
+        console.error('Error creating notification:', notifError);
+      }
     }
     
     console.log(`✅ Complaint ${complaintId} status updated to ${status}`);
