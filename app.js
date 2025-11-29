@@ -6490,6 +6490,47 @@ app.post('/api/vouchers/convert-to-unpaid', ensureDbConnection, async (req, res)
     const packageFee = Number(monthData.packageFee || 0);
     const discount = Number(monthData.discount || 0);
     const fullAmount = packageFee - discount;
+    const refundedAmount = Number(monthData.paidAmount || 0);
+    const receivedBy = monthData.receivedBy || '';
+    const paymentMethod = monthData.paymentMethod || 'Cash';
+    
+    console.log(`💰 Reversing payment - Amount: Rs ${refundedAmount}, ReceivedBy: ${receivedBy}, Method: ${paymentMethod}`);
+    
+    // CRITICAL: Deduct from receiver's income if amount was paid
+    if (refundedAmount > 0 && receivedBy) {
+      try {
+        // Determine which income field to deduct from based on payment method
+        const isBankTransfer = paymentMethod.toLowerCase().includes('bank');
+        const incomeField = isBankTransfer ? 'bankIncome' : 'cashIncome';
+        
+        console.log(`💳 Deducting Rs ${refundedAmount} from ${receivedBy}'s ${incomeField}`);
+        
+        // Get current income record
+        const incomeRecord = await incomesCollection.findOne({ name: receivedBy });
+        
+        if (incomeRecord) {
+          const currentAmount = Number(incomeRecord[incomeField] || 0);
+          const newAmount = Math.max(0, currentAmount - refundedAmount); // Don't go below 0
+          
+          await incomesCollection.updateOne(
+            { name: receivedBy },
+            { 
+              $set: { 
+                [incomeField]: newAmount,
+                updatedAt: new Date()
+              } 
+            }
+          );
+          
+          console.log(`✅ Deducted from ${receivedBy}: ${currentAmount} - ${refundedAmount} = ${newAmount} (${incomeField})`);
+        } else {
+          console.log(`⚠️ No income record found for ${receivedBy} - skipping income deduction`);
+        }
+      } catch (incomeError) {
+        console.error('❌ Error deducting from income:', incomeError);
+        // Continue with reversal even if income deduction fails
+      }
+    }
     
     // Update month: convert to unpaid, clear payment history
     const updatedMonths = [...voucher.months];
@@ -6500,7 +6541,9 @@ app.post('/api/vouchers/convert-to-unpaid', ensureDbConnection, async (req, res)
       remainingAmount: fullAmount,
       paymentMethod: '',
       receivedBy: '',
-      paymentHistory: []
+      paymentHistory: [],
+      refundDate: new Date(),
+      refundedAmount: refundedAmount
     };
     
     // Update voucher
