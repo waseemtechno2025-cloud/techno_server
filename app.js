@@ -8156,7 +8156,7 @@ app.get('/api/complaints/stats', ensureDbConnection, async (req, res) => {
 app.put('/api/complaints/:id/status', ensureDbConnection, async (req, res) => {
   try {
     const complaintId = req.params.id;
-    const { status } = req.body;
+    const { status, resolvedBy } = req.body;
     
     if (!complaintId) {
       return res.status(400).json({
@@ -8177,6 +8177,13 @@ app.put('/api/complaints/:id/status', ensureDbConnection, async (req, res) => {
     // Get complaint details first for notification
     const complaint = await complaintsCollection.findOne({ _id: new ObjectId(complaintId) });
     
+    if (!complaint) {
+      return res.status(404).json({
+        success: false,
+        message: 'Complaint not found'
+      });
+    }
+    
     // Update complaint status
     const result = await complaintsCollection.updateOne(
       { _id: new ObjectId(complaintId) },
@@ -8195,27 +8202,48 @@ app.put('/api/complaints/:id/status', ensureDbConnection, async (req, res) => {
       });
     }
     
-    // Create notification for admin if technician resolved the complaint
-    if (status.toLowerCase() === 'resolved' && complaint && complaint.reportedBy && complaint.reportedBy.toLowerCase() !== 'admin') {
+    // CRITICAL: Create notification for admin when complaint is resolved
+    // Check if status was changed from pending to resolved AND resolver is not admin
+    const wasResolved = complaint.status && complaint.status.toLowerCase() === 'resolved';
+    const isNowResolved = status.toLowerCase() === 'resolved';
+    const resolver = resolvedBy || complaint.assignTo || complaint.reportedBy || 'Unknown';
+    const isResolverAdmin = resolver.toLowerCase().includes('admin');
+    
+    console.log('📊 Notification check:', {
+      complaintId,
+      wasResolved,
+      isNowResolved,
+      resolver,
+      isResolverAdmin,
+      shouldCreateNotification: !wasResolved && isNowResolved && !isResolverAdmin
+    });
+    
+    // Create notification if: complaint is being marked as resolved (not already resolved) AND resolver is not admin
+    if (!wasResolved && isNowResolved && !isResolverAdmin) {
       try {
-        await notificationsCollection.insertOne({
+        const notificationData = {
           type: 'complaint_resolved',
           title: 'Complaint Resolved',
-          message: `${complaint.reportedBy} resolved complaint from ${complaint.userName}`,
+          message: `${resolver} resolved complaint from ${complaint.userName}`,
           complaintId: complaintId,
           userName: complaint.userName,
           userId: complaint.userId,
           whatsappNo: complaint.whatsappNo || null,
           simNo: complaint.simNo || null,
           complaintMessage: complaint.message,
-          resolvedBy: complaint.reportedBy,
+          resolvedBy: resolver,
           isRead: false,
           createdAt: new Date()
-        });
-        console.log(`✅ Notification created for admin (complaint resolved by ${complaint.reportedBy})`);
+        };
+        
+        await notificationsCollection.insertOne(notificationData);
+        console.log(`✅ Notification created for admin (complaint resolved by ${resolver})`);
+        console.log('📧 Notification data:', notificationData);
       } catch (notifError) {
-        console.error('Error creating notification:', notifError);
+        console.error('❌ Error creating notification:', notifError);
       }
+    } else {
+      console.log('⏭️ Skipping notification creation');
     }
     
     console.log(`✅ Complaint ${complaintId} status updated to ${status}`);
