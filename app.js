@@ -1574,6 +1574,16 @@ app.get('/api/dashboard/stats', async (req, res) => {
     const userIdsWithPaidMonths = new Set();
     const feeCollectorTrimmedForStats = feeCollector ? feeCollector.trim() : null;
     
+    // FALLBACK: Get users assigned to this feeCollector for old payments
+    let usersAssignedToFeeCollector = new Set();
+    if (feeCollectorTrimmedForStats) {
+      const assignedUsers = await usersCollection.find({
+        feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmedForStats.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+      }).toArray();
+      assignedUsers.forEach(u => usersAssignedToFeeCollector.add(u._id.toString()));
+      console.log(`📋 Dashboard Stats - Found ${usersAssignedToFeeCollector.size} users assigned to ${feeCollectorTrimmedForStats}`);
+    }
+    
     // Process vouchers for PAID months (check receivedBy for fee collectors)
     vouchersForStats.forEach(voucher => {
       if (Array.isArray(voucher.months)) {
@@ -1599,6 +1609,17 @@ app.get('/api/dashboard/stats', async (req, res) => {
               new RegExp(`^${feeCollectorTrimmedForStats.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(rb)
             );
             
+            // FALLBACK: For old payments where receivedBy is empty or "Myself" or "Admin"
+            // Check if this user is assigned to the feeCollector
+            const hasReceivedBy = monthReceivedBy && monthReceivedBy !== '';
+            const receivedByIsOldValue = monthReceivedBy === 'Myself' || monthReceivedBy === 'Admin';
+            
+            if (!hasReceivedBy || receivedByIsOldValue) {
+              // No receivedBy or old value - fall back to checking if user is assigned to feeCollector
+              const userIsAssigned = usersAssignedToFeeCollector.has(voucher.userId.toString());
+              return userIsAssigned;
+            }
+            
             return monthMatches || historyMatches;
           }
           
@@ -1623,10 +1644,8 @@ app.get('/api/dashboard/stats', async (req, res) => {
     });
     
     // Build paid users query with filter
-    // CRITICAL: For feeCollector filter:
-    // - Income calculation: Uses receivedBy (already calculated above) ✅
-    // - Paid users count: Uses user.feeCollector (to show assigned users regardless of receivedBy)
-    // This allows employee to see their assigned users in paid-users.tsx, even if payment was received by admin ("Myself")
+    // CRITICAL: Use receivedBy-based filtering for both fee collector and admin
+    // This ensures paid users count matches what's shown in paid users list
     let paidUsersQuery = {
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
@@ -1635,17 +1654,10 @@ app.get('/api/dashboard/stats', async (req, res) => {
       status: { $in: ['paid', 'partial'] } // Only count paid/partial users
     };
     
-    if (feeCollector) {
-      // For fee collector, use user.feeCollector filter (not receivedBy)
-      // This ensures employee sees their assigned users in paid-users.tsx
-      // Income is already calculated from receivedBy above (correct)
-      paidUsersQuery.feeCollector = { $regex: new RegExp(`^${feeCollector.trim()}$`, 'i') };
-      console.log(`🔒 Dashboard Stats - Using user.feeCollector filter for paid users count: ${feeCollector.trim()}`);
-      console.log(`💰 Income calculation uses receivedBy (already calculated above)`);
-    } else if (paidUserIds.length > 0) {
-      // No feeCollector filter - use userIds from vouchers
+    // Use userIds calculated from vouchers (receivedBy filter already applied)
+    if (paidUserIds.length > 0) {
       paidUsersQuery._id = { $in: paidUserIds };
-      console.log(`🔒 Dashboard Stats - Using userIds from vouchers (${paidUserIds.length} users)`);
+      console.log(`🔒 Dashboard Stats - Using userIds from vouchers (receivedBy filter): ${paidUserIds.length} users`);
     }
     
     if (assignTo) {
