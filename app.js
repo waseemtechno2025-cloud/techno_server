@@ -1791,7 +1791,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
     
     // Build expiring soon query with filter
     let expiringSoonQuery = {
-      status: { $in: ['paid', 'partial', 'unpaid', 'pending'] },
+      status: { $in: ['paid', 'partial', 'unpaid', 'pending', 'superbalance'] },
       expiryDate: { 
         $gte: tomorrow.toISOString(), 
         $lte: endOfTomorrow.toISOString() 
@@ -3255,7 +3255,7 @@ app.get('/api/users/expiring-soon', async (req, res) => {
     // If date is provided: fetch ALL active users (we'll filter by date later)
     // If no date: only fetch users marked by cron job with showInExpiringSoon flag
     const query = {
-      status: { $in: ['paid', 'partial', 'unpaid', 'pending'] },
+      status: { $in: ['paid', 'partial', 'unpaid', 'pending', 'superbalance'] },
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
@@ -4687,7 +4687,7 @@ const checkTomorrowExpiringUsers = async () => {
     
     // Fetch ALL users and parse their expiry dates
     const usersAll = await usersCollection.find({
-      status: { $in: ['paid', 'partial', 'unpaid', 'pending'] },
+      status: { $in: ['paid', 'partial', 'unpaid', 'pending', 'superbalance'] },
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
@@ -4823,7 +4823,7 @@ const moveTodayExpiredToUnpaid = async () => {
     const todayD = nowInPKT.getUTCDate();
 
     const usersAll = await usersCollection.find({
-      status: { $in: ['paid', 'partial', 'unpaid', 'pending'] },
+      status: { $in: ['paid', 'partial', 'unpaid', 'pending', 'superbalance'] },
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
