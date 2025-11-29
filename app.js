@@ -1810,10 +1810,35 @@ app.get('/api/dashboard/stats', async (req, res) => {
     
     const expiringSoon = await usersCollection.countDocuments(expiringSoonQuery);
     
-    // Deactivated users
-    const deactivatedUsers = await usersCollection.countDocuments({
-      status: 'inactive'
-    });
+    // Active users - users with serviceStatus = 'active' or not set (default active)
+    let activeUsersQuery = {
+      $or: [
+        { serviceStatus: 'active' },
+        { serviceStatus: { $exists: false } },
+        { serviceStatus: null }
+      ]
+    };
+    if (assignTo) {
+      activeUsersQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
+    }
+    if (feeCollector) {
+      activeUsersQuery.feeCollector = { $regex: new RegExp(`^${feeCollector.trim()}$`, 'i') };
+    }
+    const activeUsers = await usersCollection.countDocuments(activeUsersQuery);
+    
+    // Deactivated/Inactive users - users with serviceStatus = 'inactive'
+    let deactivatedQuery = {
+      serviceStatus: 'inactive'
+    };
+    if (assignTo) {
+      deactivatedQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
+    }
+    if (feeCollector) {
+      deactivatedQuery.feeCollector = { $regex: new RegExp(`^${feeCollector.trim()}$`, 'i') };
+    }
+    const deactivatedUsers = await usersCollection.countDocuments(deactivatedQuery);
+    
+    console.log(`📊 User counts - Active: ${activeUsers}, Inactive: ${deactivatedUsers}, Total: ${totalUsers}`);
     
     // Total income - CRITICAL: Check incomes collection first, only recalculate if needed
     // This ensures transfers are not lost on dashboard refresh
@@ -2218,7 +2243,8 @@ app.get('/api/dashboard/stats', async (req, res) => {
         balance: outstanding, // Same as outstanding - sum of remainingAmount from partial users
         balanceCustomers, // Number of customers with remaining balance
         expiringSoon,
-        deactivatedUsers
+        activeUsers,        // Users with serviceStatus = 'active' or not set
+        deactivatedUsers    // Users with serviceStatus = 'inactive'
       }
     });
   } catch (error) {
