@@ -7394,20 +7394,12 @@ app.get('/api/collections/history/:feeCollector', ensureDbConnection, async (req
     
     const collectionHistory = [];
     
+    let sampleLogged = false;
+    
     // Process vouchers to find payments received by this fee collector
     allVouchers.forEach(voucher => {
       // Try multiple fields to get user name
       const userName = voucher.userName || voucher.name || voucher.user || 'Unknown';
-      
-      // Debug log first voucher
-      if (collectionHistory.length === 0) {
-        console.log('📝 Sample voucher structure:', {
-          userName: voucher.userName,
-          name: voucher.name,
-          user: voucher.user,
-          hasMonths: !!voucher.months
-        });
-      }
       
       // Handle multi-month vouchers
       if (voucher.months && Array.isArray(voucher.months)) {
@@ -7647,6 +7639,66 @@ app.post('/api/incomes', ensureDbConnection, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error adding income',
+      error: error.message
+    });
+  }
+});
+
+// POST - Update income manually (for admin to change technician income)
+app.post('/api/incomes/update', ensureDbConnection, async (req, res) => {
+  try {
+    const { name, cashIncome } = req.body;
+    
+    if (!name) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name is required'
+      });
+    }
+    
+    const incomeValue = Number(cashIncome || 0);
+    console.log(`💰 Updating income for ${name} to Rs ${incomeValue}`);
+    
+    // Find existing income record
+    const existingIncome = await incomesCollection.findOne({ name: name });
+    
+    if (existingIncome) {
+      // Update existing record
+      await incomesCollection.updateOne(
+        { name: name },
+        { 
+          $set: { 
+            cashIncome: incomeValue,
+            updatedAt: new Date()
+          } 
+        }
+      );
+      console.log(`✅ Updated income for ${name}`);
+    } else {
+      // Create new record
+      await incomesCollection.insertOne({
+        name: name,
+        cashIncome: incomeValue,
+        bankIncome: 0,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+      console.log(`✅ Created new income record for ${name}`);
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: `Income updated to Rs ${incomeValue} for ${name}`,
+      data: {
+        name: name,
+        cashIncome: incomeValue
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error updating income:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error updating income',
       error: error.message
     });
   }
