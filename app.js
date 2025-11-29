@@ -7372,6 +7372,137 @@ app.get('/api/collections/transfers/history', ensureDbConnection, async (req, re
   }
 });
 
+// GET collection history for a specific fee collector
+app.get('/api/collections/history/:feeCollector', ensureDbConnection, async (req, res) => {
+  try {
+    const feeCollectorName = req.params.feeCollector;
+    
+    if (!feeCollectorName) {
+      return res.status(400).json({
+        success: false,
+        message: 'Fee collector name is required'
+      });
+    }
+    
+    console.log(`📜 Fetching collection history for: ${feeCollectorName}`);
+    
+    const vouchersCollection = db.collection('vouchers');
+    
+    // Get all vouchers
+    const allVouchers = await vouchersCollection.find({}).toArray();
+    console.log(`📜 Found ${allVouchers.length} total vouchers`);
+    
+    const collectionHistory = [];
+    
+    // Process vouchers to find payments received by this fee collector
+    allVouchers.forEach(voucher => {
+      const userName = voucher.userName || 'Unknown';
+      
+      // Handle multi-month vouchers
+      if (voucher.months && Array.isArray(voucher.months)) {
+        voucher.months.forEach(month => {
+          if (month.status === 'paid' && month.receivedBy) {
+            const receivedByLower = month.receivedBy.toLowerCase().trim();
+            const feeCollectorLower = feeCollectorName.toLowerCase().trim();
+            
+            if (receivedByLower === feeCollectorLower) {
+              const paidAmount = Number(month.paidAmount || 0);
+              if (paidAmount > 0) {
+                collectionHistory.push({
+                  userName: userName,
+                  amount: paidAmount,
+                  date: month.paymentDate || month.paidDate || new Date(),
+                  paymentMethod: month.paymentMethod || 'Cash',
+                  month: month.month
+                });
+              }
+            }
+          }
+        });
+      }
+      // Handle old single-month vouchers
+      else if (voucher.status === 'paid') {
+        // Check receivedBy field
+        const receivedBy = voucher.receivedBy || '';
+        const receivedByLower = receivedBy.toLowerCase().trim();
+        const feeCollectorLower = feeCollectorName.toLowerCase().trim();
+        
+        // Match if receivedBy matches fee collector name
+        if (receivedByLower === feeCollectorLower) {
+          const paidAmount = Number(voucher.paidAmount || 0);
+          if (paidAmount > 0) {
+            collectionHistory.push({
+              userName: userName,
+              amount: paidAmount,
+              date: voucher.paymentDate || voucher.paidDate || new Date(),
+              paymentMethod: voucher.paymentMethod || 'Cash'
+            });
+          }
+        }
+        // Fallback: Check if user is assigned to this fee collector
+        else if (!receivedBy || receivedBy === 'Myself' || receivedBy === 'Admin') {
+          const userFeeCollector = voucher.feeCollector || '';
+          const userFeeCollectorLower = userFeeCollector.toLowerCase().trim();
+          
+          if (userFeeCollectorLower === feeCollectorLower) {
+            const paidAmount = Number(voucher.paidAmount || 0);
+            if (paidAmount > 0) {
+              collectionHistory.push({
+                userName: userName,
+                amount: paidAmount,
+                date: voucher.paymentDate || voucher.paidDate || new Date(),
+                paymentMethod: voucher.paymentMethod || 'Cash'
+              });
+            }
+          }
+        }
+      }
+      
+      // Check payment history in multi-month vouchers
+      if (voucher.paymentHistory && Array.isArray(voucher.paymentHistory)) {
+        voucher.paymentHistory.forEach(payment => {
+          const receivedByLower = (payment.receivedBy || '').toLowerCase().trim();
+          const feeCollectorLower = feeCollectorName.toLowerCase().trim();
+          
+          if (receivedByLower === feeCollectorLower) {
+            const paidAmount = Number(payment.amount || 0);
+            if (paidAmount > 0) {
+              collectionHistory.push({
+                userName: userName,
+                amount: paidAmount,
+                date: payment.date || new Date(),
+                paymentMethod: payment.paymentMethod || 'Cash',
+                month: payment.month
+              });
+            }
+          }
+        });
+      }
+    });
+    
+    // Sort by date (most recent first)
+    collectionHistory.sort((a, b) => {
+      const dateA = new Date(a.date);
+      const dateB = new Date(b.date);
+      return dateB.getTime() - dateA.getTime();
+    });
+    
+    console.log(`✅ Found ${collectionHistory.length} collection records for ${feeCollectorName}`);
+    
+    res.status(200).json({
+      success: true,
+      data: collectionHistory
+    });
+  } catch (error) {
+    console.error('❌ Error fetching collection history:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching collection history',
+      error: error.message
+    });
+  }
+});
+
 // ==================== INCOMES API ====================
 
 // GET all incomes
