@@ -7047,7 +7047,7 @@ app.get('/api/incomes/:name', ensureDbConnection, async (req, res) => {
       return res.status(404).json({
         success: false,
         message: 'Income record not found',
-        data: { name, totalIncome: 0 }
+        data: { name, cashIncome: 0 }
       });
     }
     
@@ -7060,6 +7060,86 @@ app.get('/api/incomes/:name', ensureDbConnection, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error fetching income',
+      error: error.message
+    });
+  }
+});
+
+// POST - Add income when payment is received
+app.post('/api/incomes', ensureDbConnection, async (req, res) => {
+  try {
+    const { receivedBy, amount, paymentMethod } = req.body;
+    
+    if (!receivedBy || !amount || amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'receivedBy and valid amount are required'
+      });
+    }
+
+    console.log(`💰 Adding income: ${receivedBy} - Rs ${amount} (${paymentMethod || 'Cash'})`);
+
+    // CRITICAL: Income storage logic based on who receives payment:
+    // - Employee: ALWAYS cashIncome (regardless of payment method Cash/Bank)
+    // - Admin: Cash → cashIncome, Bank → bankIncome
+    
+    const receivedByTrimmed = receivedBy.trim();
+    const isAdmin = receivedByTrimmed.toLowerCase() === 'admin' || receivedByTrimmed.toLowerCase() === 'myself';
+    
+    // Determine which field to update
+    let updateField = 'cashIncome';
+    if (isAdmin) {
+      // Admin: respect payment method
+      const isCash = !paymentMethod || paymentMethod === 'Cash' || paymentMethod === 'cash';
+      updateField = isCash ? 'cashIncome' : 'bankIncome';
+    } else {
+      // Employee: always cashIncome
+      updateField = 'cashIncome';
+    }
+    
+    // Check if income record exists for this person
+    const existingIncome = await incomesCollection.findOne({
+      name: { $regex: new RegExp(`^${receivedByTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+    });
+
+    if (existingIncome) {
+      // Update existing income
+      await incomesCollection.updateOne(
+        { name: { $regex: new RegExp(`^${receivedByTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+        {
+          $inc: { [updateField]: amount },
+          $set: { lastUpdated: new Date() }
+        }
+      );
+      console.log(`💰 Updated income for ${receivedBy}: ${updateField === 'cashIncome' ? 'Cash' : 'Bank'} +Rs ${amount}`);
+    } else {
+      // Create new income record
+      const newIncome = {
+        name: receivedByTrimmed,
+        cashIncome: updateField === 'cashIncome' ? amount : 0,
+        bankIncome: updateField === 'bankIncome' ? amount : 0,
+        createdAt: new Date(),
+        lastUpdated: new Date()
+      };
+      await incomesCollection.insertOne(newIncome);
+      console.log(`💰 Created new income record for ${receivedBy}: ${updateField === 'cashIncome' ? 'Cash' : 'Bank'} Rs ${amount}`);
+    }
+
+    // Get updated income record
+    const updatedIncome = await incomesCollection.findOne({
+      name: { $regex: new RegExp(`^${receivedByTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Income updated successfully',
+      data: updatedIncome
+    });
+  } catch (error) {
+    console.error('Error adding income:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error adding income',
       error: error.message
     });
   }
