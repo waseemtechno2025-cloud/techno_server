@@ -6800,20 +6800,25 @@ app.post('/api/collections/transfer', ensureDbConnection, async (req, res) => {
       console.log(`💰 Created income record for ${feeCollector} with -Rs${transferAmount} in cash`);
     }
     
-    // Update or create Admin income - ADD to cashIncome AND totalIncome
+    // Update or create Admin income - ADD to cashIncome ONLY (not totalIncome)
+    // Transfers are always cash, so only cashIncome increases
     const adminUpdateResult = await incomesCol.updateOne(
       { name: { $regex: new RegExp(`^Admin$`, 'i') } },
       { 
         $inc: { 
-          cashIncome: transferAmount,   // Cash mein add karo
-          totalIncome: transferAmount    // Total bhi update karo
+          cashIncome: transferAmount   // Sirf cash mein add karo
         },
         $set: { lastUpdated: new Date() },
-        $setOnInsert: { name: 'Admin', createdAt: new Date(), cashIncome: 0, bankIncome: 0, totalIncome: 0 }
+        $setOnInsert: { 
+          name: 'Admin', 
+          createdAt: new Date(), 
+          bankIncome: 0,
+          totalIncome: 0  // totalIncome separate calculation se update hoga
+        }
       },
       { upsert: true }
     );
-    console.log(`💰 Income increased: Admin +Rs${transferAmount} in CASH (matched: ${adminUpdateResult.matchedCount}, modified: ${adminUpdateResult.modifiedCount}, upserted: ${adminUpdateResult.upsertedId || 'none'})`);
+    console.log(`💰 Income increased: Admin +Rs${transferAmount} in CASH ONLY (matched: ${adminUpdateResult.matchedCount}, modified: ${adminUpdateResult.modifiedCount}, upserted: ${adminUpdateResult.upsertedId || 'none'})`);
     
     // 📝 SAVE TRANSACTION: Store in transactions collection
     try {
