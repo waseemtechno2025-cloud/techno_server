@@ -1715,14 +1715,53 @@ app.get('/api/dashboard/stats', async (req, res) => {
       status: 'inactive'
     });
     
-    // Total income - CRITICAL: Calculate from vouchers based on receivedBy if feeCollector filter is provided
-    // This ensures income matches what fee collector actually received
+    // Total income - CRITICAL: Check incomes collection first, only recalculate if needed
+    // This ensures transfers are not lost on dashboard refresh
     let totalIncome = 0;
     let cashIncome = 0;
     let bankIncome = 0;
     const feeCollectorTrimmed = feeCollector ? feeCollector.trim() : null;
     
+    // CHECK INCOMES COLLECTION FIRST
+    const incomesCol = db.collection('incomes');
+    let shouldRecalculate = false;
+    
     if (feeCollectorTrimmed) {
+      // Check if fee collector has existing income in database
+      const existingIncome = await incomesCol.findOne({ 
+        name: { $regex: new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } 
+      });
+      
+      if (existingIncome && existingIncome.cashIncome > 0) {
+        // Use existing income from database (don't recalculate)
+        cashIncome = existingIncome.cashIncome || 0;
+        totalIncome = cashIncome;
+        console.log(`💰 Using existing income from database for ${feeCollectorTrimmed}: Cash Rs ${cashIncome}`);
+      } else {
+        // No income or cashIncome is 0, recalculate from vouchers
+        shouldRecalculate = true;
+        console.log(`💰 No existing income found, calculating from vouchers for ${feeCollectorTrimmed}`);
+      }
+    } else {
+      // Admin - check existing income
+      const existingAdminIncome = await incomesCol.findOne({ 
+        name: { $regex: new RegExp(`^Admin$`, 'i') } 
+      });
+      
+      if (existingAdminIncome && existingAdminIncome.cashIncome > 0) {
+        // Use existing income from database
+        cashIncome = existingAdminIncome.cashIncome || 0;
+        totalIncome = cashIncome;
+        console.log(`💰 Using existing income from database for Admin: Cash Rs ${cashIncome}`);
+      } else {
+        // No income or cashIncome is 0, recalculate from vouchers
+        shouldRecalculate = true;
+        console.log(`💰 No existing income found, calculating from vouchers for Admin`);
+      }
+    }
+    
+    // RECALCULATE FROM VOUCHERS ONLY IF NEEDED
+    if (shouldRecalculate && feeCollectorTrimmed) {
       // Calculate income from vouchers where receivedBy matches feeCollector
       console.log(`💰 Calculating income from vouchers with receivedBy: ${feeCollectorTrimmed}`);
       
@@ -1783,8 +1822,8 @@ app.get('/api/dashboard/stats', async (req, res) => {
       console.log(`💰 Total income from vouchers (receivedBy=${feeCollectorTrimmed}): Rs ${totalIncome}`);
       console.log(`💵 Cash income: Rs ${cashIncome}`);
       console.log(`🏦 Bank income: Rs ${bankIncome}`);
-    } else {
-      // No feeCollector filter - Admin login
+    } else if (shouldRecalculate && !feeCollectorTrimmed) {
+      // No feeCollector filter - Admin login - Recalculate from vouchers
       // CRITICAL: Admin ki income sirf "Admin" ya "Myself" select karne par increase hogi
       // Employee name select karne par admin ki income increase nahi hogi
       console.log(`💰 Admin login - Calculating income from vouchers with receivedBy: "Admin" or "Myself"`);
@@ -1979,9 +2018,10 @@ app.get('/api/dashboard/stats', async (req, res) => {
     const balanceCustomers = partialUsers.length;
     
     // 💰 SAVE/UPDATE INCOME IN incomes COLLECTION
-    // Jab bhi admin ya fee collector dashboard par land kare, unki income automatically save/update ho
+    // ONLY save if we recalculated from vouchers (shouldRecalculate = true)
+    // If we used existing income, don't overwrite it (to preserve transfers)
     try {
-      if (feeCollectorTrimmed) {
+      if (shouldRecalculate && feeCollectorTrimmed) {
         // Fee Collector ki income save/update karein
         const existingIncome = await incomesCollection.findOne({ 
           name: { $regex: new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } 
@@ -2009,8 +2049,8 @@ app.get('/api/dashboard/stats', async (req, res) => {
           });
           console.log(`💰 Created new income record for ${feeCollectorTrimmed}: Cash Rs ${cashIncome}`);
         }
-      } else {
-        // Admin ki income save/update karein
+      } else if (shouldRecalculate && !feeCollectorTrimmed) {
+        // Admin ki income save/update karein (only if recalculated)
         const existingAdminIncome = await incomesCollection.findOne({ 
           name: { $regex: new RegExp(`^Admin$`, 'i') } 
         });
@@ -2037,6 +2077,9 @@ app.get('/api/dashboard/stats', async (req, res) => {
           });
           console.log(`💰 Created new income record for Admin: Cash Rs ${cashIncome}`);
         }
+      } else {
+        // Using existing income, not overwriting
+        console.log(`💰 Skipping income save - using existing income from database (preserves transfers)`);
       }
     } catch (incomeError) {
       console.error('❌ Error saving income to incomes collection:', incomeError);
