@@ -6660,6 +6660,16 @@ app.post('/api/collections/transfer', ensureDbConnection, async (req, res) => {
     
     console.log('🔵 ===== TRANSFER API CALLED =====');
     console.log('🔵 Request body:', { feeCollector, amount, message });
+    console.log('🔵 DB Status:', { isConnected, hasDb: !!db });
+    
+    // Ensure database is connected
+    if (!db) {
+      console.error('❌ Database not available');
+      return res.status(503).json({
+        success: false,
+        message: 'Database connection not available'
+      });
+    }
     
     if (!feeCollector || !amount) {
       return res.status(400).json({
@@ -6682,6 +6692,7 @@ app.post('/api/collections/transfer', ensureDbConnection, async (req, res) => {
     const incomesCol = db.collection('incomes');
     const vouchersCol = db.collection('vouchers');
     const transactionsCol = db.collection('transactions');
+    console.log('🔵 Collections initialized:', { incomes: !!incomesCol, vouchers: !!vouchersCol, transactions: !!transactionsCol });
     
     // Check if fee collector has enough income to transfer
     const feeCollectorIncome = await incomesCol.findOne({ name: feeCollector.trim() });
