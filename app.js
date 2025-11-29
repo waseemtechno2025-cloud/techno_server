@@ -8204,12 +8204,15 @@ app.put('/api/complaints/:id/status', ensureDbConnection, async (req, res) => {
           message: `${complaint.reportedBy} resolved complaint from ${complaint.userName}`,
           complaintId: complaintId,
           userName: complaint.userName,
+          userId: complaint.userId,
+          whatsappNo: complaint.whatsappNo || null,
+          simNo: complaint.simNo || null,
           complaintMessage: complaint.message,
           resolvedBy: complaint.reportedBy,
           isRead: false,
           createdAt: new Date()
         });
-        console.log('✅ Notification created for admin');
+        console.log(`✅ Notification created for admin (complaint resolved by ${complaint.reportedBy})`);
       } catch (notifError) {
         console.error('Error creating notification:', notifError);
       }
