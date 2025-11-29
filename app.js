@@ -3750,6 +3750,220 @@ app.delete('/api/transactions/expense/:id', ensureDbConnection, async (req, res)
   }
 });
 
+// ============ EMPLOYEE EXPENSE API ROUTES ============
+
+// GET employee expenses grouped by month
+app.get('/api/employee-expense/by-month', ensureDbConnection, async (req, res) => {
+  try {
+    const employeeExpenseCollection = db.collection('employee_expense');
+    const paidBy = req.query.paidBy; // Fee collector name filter
+    
+    // Build query with paidBy filter if provided
+    const query = {};
+    if (paidBy) {
+      query.paidBy = { $regex: new RegExp(`^${paidBy.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') };
+      console.log(`💰 Employee expense by month - filtering by paidBy: ${paidBy}`);
+    }
+    
+    const expenses = await employeeExpenseCollection.find(query).sort({ date: -1 }).toArray();
+    console.log(`💰 Employee expense by month - found ${expenses.length} expenses${paidBy ? ` for ${paidBy}` : ''}`);
+    
+    // Group expenses by month
+    const expensesByMonth = {};
+    
+    expenses.forEach(expense => {
+      const date = new Date(expense.date);
+      // Format as "Month YYYY" (e.g., "November 2025")
+      const monthYear = date.toLocaleDateString('en-US', { 
+        year: 'numeric', 
+        month: 'long'
+      });
+      
+      if (!expensesByMonth[monthYear]) {
+        expensesByMonth[monthYear] = {
+          month: monthYear,
+          expenses: [],
+          totalAmount: 0,
+          count: 0
+        };
+      }
+      
+      expensesByMonth[monthYear].expenses.push(expense);
+      expensesByMonth[monthYear].totalAmount += expense.amount;
+      expensesByMonth[monthYear].count += 1;
+    });
+    
+    // Convert to array and sort by most recent month
+    const monthsArray = Object.values(expensesByMonth).sort((a, b) => {
+      const dateA = new Date(a.month);
+      const dateB = new Date(b.month);
+      return dateB.getTime() - dateA.getTime();
+    });
+    
+    // Always include current month if not present
+    const currentDate = new Date();
+    const currentMonth = currentDate.toLocaleDateString('en-US', { 
+      year: 'numeric', 
+      month: 'long'
+    });
+    
+    if (!expensesByMonth[currentMonth]) {
+      monthsArray.unshift({
+        month: currentMonth,
+        expenses: [],
+        totalAmount: 0,
+        count: 0
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      data: monthsArray
+    });
+  } catch (error) {
+    console.error('Error fetching employee expenses by month:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching employee expenses by month',
+      error: error.message
+    });
+  }
+});
+
+// GET employee expenses for a specific month
+app.get('/api/employee-expense/:month', ensureDbConnection, async (req, res) => {
+  try {
+    const { month } = req.params;
+    const paidBy = req.query.paidBy; // Fee collector name filter
+    
+    if (!month) {
+      return res.status(400).json({
+        success: false,
+        message: 'Month parameter is required'
+      });
+    }
+    
+    const employeeExpenseCollection = db.collection('employee_expense');
+    
+    // Build query with paidBy filter if provided
+    const query = {};
+    if (paidBy) {
+      query.paidBy = { $regex: new RegExp(`^${paidBy.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') };
+      console.log(`💰 Employee expense for month ${month} - filtering by paidBy: ${paidBy}`);
+    }
+    
+    const allExpenses = await employeeExpenseCollection.find(query).toArray();
+    console.log(`💰 Found ${allExpenses.length} employee expenses${paidBy ? ` for ${paidBy}` : ''}`);
+    
+    // Filter expenses for the specified month
+    const filteredExpenses = allExpenses.filter(expense => {
+      const date = new Date(expense.date);
+      const expenseMonth = date.toLocaleDateString('en-US', { 
+        year: 'numeric', 
+        month: 'long'
+      });
+      return expenseMonth === month;
+    });
+    
+    res.status(200).json({
+      success: true,
+      data: filteredExpenses,
+      month
+    });
+  } catch (error) {
+    console.error('Error fetching employee expenses by month:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching employee expenses by month',
+      error: error.message
+    });
+  }
+});
+
+// POST add new employee expense
+app.post('/api/employee-expense', ensureDbConnection, async (req, res) => {
+  try {
+    const { amount, description, paidTo, paidBy, date } = req.body;
+    
+    // Validate required fields
+    if (!amount || !description) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount and description are required'
+      });
+    }
+    
+    // Create expense object
+    const expense = {
+      amount: parseFloat(amount),
+      description,
+      category: 'General',
+      paidTo: paidTo || 'N/A',
+      paidBy: paidBy || 'Admin', // Default to Admin if not provided
+      date: date ? new Date(date) : new Date(),
+      createdAt: new Date()
+    };
+    
+    // Insert into employee_expense collection
+    const employeeExpenseCollection = db.collection('employee_expense');
+    const result = await employeeExpenseCollection.insertOne(expense);
+    
+    // Get the created expense
+    const createdExpense = await employeeExpenseCollection.findOne({ _id: result.insertedId });
+    
+    console.log('✅ Employee expense added:', createdExpense);
+    
+    res.status(201).json({
+      success: true,
+      message: 'Employee expense added successfully',
+      data: createdExpense
+    });
+  } catch (error) {
+    console.error('❌ Error adding employee expense:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error adding employee expense',
+      error: error.message
+    });
+  }
+});
+
+// DELETE employee expense by ID
+app.delete('/api/employee-expense/:id', ensureDbConnection, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid employee expense ID'
+      });
+    }
+    
+    const employeeExpenseCollection = db.collection('employee_expense');
+    const result = await employeeExpenseCollection.deleteOne({ _id: new ObjectId(id) });
+    
+    if (result.deletedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Employee expense not found'
+      });
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: 'Employee expense deleted successfully'
+    });
+  } catch (error) {
+    console.error('❌ Error deleting employee expense:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error deleting employee expense',
+      error: error.message
+    });
+  }
+});
+
 // GET outstanding users
 app.get('/api/users/outstanding', async (req, res) => {
   try {
