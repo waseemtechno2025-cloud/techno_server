@@ -3883,13 +3883,13 @@ app.get('/api/employee-expense/:month', ensureDbConnection, async (req, res) => 
 // POST add new employee expense
 app.post('/api/employee-expense', ensureDbConnection, async (req, res) => {
   try {
-    const { amount, description, paidTo, paidBy, date } = req.body;
+    const { amount, description, userName, paidTo, paidBy, date } = req.body;
     
     // Validate required fields
-    if (!amount || !description) {
+    if (!amount || !description || !userName) {
       return res.status(400).json({
         success: false,
-        message: 'Amount and description are required'
+        message: 'Amount, description, and user name are required'
       });
     }
     
@@ -3898,6 +3898,7 @@ app.post('/api/employee-expense', ensureDbConnection, async (req, res) => {
       amount: parseFloat(amount),
       description,
       category: 'General',
+      userName: userName.trim(),
       paidTo: paidTo || 'N/A',
       paidBy: paidBy || 'Admin', // Default to Admin if not provided
       date: date ? new Date(date) : new Date(),
