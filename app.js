@@ -2035,14 +2035,26 @@ app.get('/api/dashboard/stats', async (req, res) => {
     }
     
     // Total expense - combine both transactions and expenses collections
+    // For fee collector, filter by paidBy field
+    const expenseMatchQuery = { type: 'expense' };
+    if (feeCollector) {
+      expenseMatchQuery.paidBy = { $regex: new RegExp(`^${feeCollector.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') };
+    }
+    
     const expenseResultFromTransactions = await transactionsCollection.aggregate([
-      { $match: { type: 'expense' } },
+      { $match: expenseMatchQuery },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]).toArray();
     
     // Get expenses from dedicated expenses collection
     const expensesCollection = db.collection('expenses');
+    const expensesMatchQuery = {};
+    if (feeCollector) {
+      expensesMatchQuery.paidBy = { $regex: new RegExp(`^${feeCollector.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') };
+    }
+    
     const expenseResultFromExpenses = await expensesCollection.aggregate([
+      { $match: expensesMatchQuery },
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]).toArray();
     
@@ -2051,7 +2063,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
     
     // Add both totals for the complete expense amount
     const totalExpense = Number(transactionsExpenseTotal) + Number(expensesTotal);
-    console.log(`💰 Dashboard stats: Total expense = ${totalExpense} (transactions: ${transactionsExpenseTotal}, expenses: ${expensesTotal})`);
+    console.log(`💰 Dashboard stats: Total expense = ${totalExpense} (transactions: ${transactionsExpenseTotal}, expenses: ${expensesTotal})${feeCollector ? ` (filtered by paidBy: ${feeCollector})` : ''}`);
     
     // Outstanding/Balance - Calculate from vouchers to match unpaid-users.tsx display amounts
     const vouchersCollection = db.collection('vouchers');
@@ -3477,7 +3489,17 @@ app.get('/api/expense/by-date-range', ensureDbConnection, async (req, res) => {
 app.get('/api/expense/by-month', ensureDbConnection, async (req, res) => {
   try {
     const expensesCollection = db.collection('expenses');
-    const expenses = await expensesCollection.find({}).sort({ date: -1 }).toArray();
+    const paidBy = req.query.paidBy; // Fee collector name filter
+    
+    // Build query with paidBy filter if provided
+    const query = {};
+    if (paidBy) {
+      query.paidBy = { $regex: new RegExp(`^${paidBy.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') };
+      console.log(`💰 Expense by month - filtering by paidBy: ${paidBy}`);
+    }
+    
+    const expenses = await expensesCollection.find(query).sort({ date: -1 }).toArray();
+    console.log(`💰 Expense by month - found ${expenses.length} expenses${paidBy ? ` for ${paidBy}` : ''}`);
     
     // Group expenses by month
     const expensesByMonth = {};
@@ -3618,7 +3640,7 @@ app.get('/api/debug/collections', ensureDbConnection, async (req, res) => {
 // POST add new expense
 app.post('/api/transactions/expense', ensureDbConnection, async (req, res) => {
   try {
-    const { amount, description, category, paidTo, date } = req.body;
+    const { amount, description, category, paidTo, paidBy, date } = req.body;
     
     // Validate required fields
     if (!amount || !description || !category) {
@@ -3634,6 +3656,7 @@ app.post('/api/transactions/expense', ensureDbConnection, async (req, res) => {
       description,
       category,
       paidTo: paidTo || 'N/A',
+      paidBy: paidBy || 'Admin', // Default to Admin if not provided
       date: date ? new Date(date) : new Date(),
       createdAt: new Date()
     };
@@ -3653,6 +3676,7 @@ app.post('/api/transactions/expense', ensureDbConnection, async (req, res) => {
         type: 'expense',
         category: expense.category,
         paidTo: expense.paidTo,
+        paidBy: expense.paidBy,
         paymentDate: expense.date,
         createdAt: expense.createdAt
       });
