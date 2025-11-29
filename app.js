@@ -6696,11 +6696,12 @@ app.post('/api/collections/transfer', ensureDbConnection, async (req, res) => {
     
     // Check if fee collector has enough income to transfer
     const feeCollectorIncome = await incomesCol.findOne({ name: feeCollector.trim() });
-    let currentIncome = feeCollectorIncome?.totalIncome || 0;
+    let currentIncome = feeCollectorIncome?.cashIncome || 0;
+    console.log(`💰 Fee collector current cashIncome: Rs${currentIncome}`);
     
     // Fallback: If incomes collection is empty/not synced, calculate from vouchers
     if (currentIncome === 0) {
-      console.log('⚠️ Incomes collection not synced, calculating from vouchers...');
+      console.log('⚠️ Incomes collection not synced or cashIncome is 0, calculating from vouchers...');
       const vouchers = await vouchersCol.find({}).toArray();
       
       for (const voucher of vouchers) {
@@ -6771,36 +6772,33 @@ app.post('/api/collections/transfer', ensureDbConnection, async (req, res) => {
     const feeCollectorIncomeRecord = await incomesCol.findOne({ 
       name: { $regex: new RegExp(`^${feeCollector.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } 
     });
-    console.log('🔍 Fee collector income record found:', feeCollectorIncomeRecord ? `Yes (Current income: Rs${feeCollectorIncomeRecord.totalIncome})` : 'No');
+    console.log('🔍 Fee collector income record found:', feeCollectorIncomeRecord ? `Yes (Current cashIncome: Rs${feeCollectorIncomeRecord.cashIncome || 0})` : 'No');
     
     if (feeCollectorIncomeRecord) {
-      // Update existing fee collector income - CUT from cashIncome AND totalIncome
+      // Update existing fee collector income - CUT from cashIncome ONLY
       const updateResult = await incomesCol.updateOne(
         { name: { $regex: new RegExp(`^${feeCollector.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
         { 
           $inc: { 
-            cashIncome: -transferAmount,  // Cash se cut karo
-            totalIncome: -transferAmount   // Total bhi update karo
+            cashIncome: -transferAmount  // Sirf cash se cut karo
           },
           $set: { lastUpdated: new Date() }
         }
       );
-      console.log(`💰 Income decreased: ${feeCollector} -Rs${transferAmount} from CASH (matched: ${updateResult.matchedCount}, modified: ${updateResult.modifiedCount})`);
+      console.log(`💰 Income decreased: ${feeCollector} -Rs${transferAmount} from CASH ONLY (matched: ${updateResult.matchedCount}, modified: ${updateResult.modifiedCount})`);
     } else {
       console.log(`⚠️ Warning: ${feeCollector} has no income record in incomes collection. Creating one with negative balance.`);
       // Create a new record with negative balance
       await incomesCol.insertOne({
         name: feeCollector.trim(),
-        totalIncome: -transferAmount,
         cashIncome: -transferAmount,  // Cash mein negative
-        bankIncome: 0,
         createdAt: new Date(),
         lastUpdated: new Date()
       });
       console.log(`💰 Created income record for ${feeCollector} with -Rs${transferAmount} in cash`);
     }
     
-    // Update or create Admin income - ADD to cashIncome ONLY (not totalIncome)
+    // Update or create Admin income - ADD to cashIncome ONLY
     // Transfers are always cash, so only cashIncome increases
     const adminUpdateResult = await incomesCol.updateOne(
       { name: { $regex: new RegExp(`^Admin$`, 'i') } },
@@ -6811,9 +6809,8 @@ app.post('/api/collections/transfer', ensureDbConnection, async (req, res) => {
         $set: { lastUpdated: new Date() },
         $setOnInsert: { 
           name: 'Admin', 
-          createdAt: new Date(), 
-          bankIncome: 0,
-          totalIncome: 0  // totalIncome separate calculation se update hoga
+          createdAt: new Date()
+          // bankIncome will be set separately if needed
         }
       },
       { upsert: true }
