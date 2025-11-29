@@ -805,11 +805,98 @@ app.delete('/api/users/:id', async (req, res) => {
 
     const userId = new ObjectId(req.params.id);
     
-    // First delete all vouchers for this user
-    const vouchersResult = await vouchersCollection.deleteMany({ userId: req.params.id });
-    console.log(`Deleted ${vouchersResult.deletedCount} vouchers for user ${req.params.id}`);
+    // STEP 1: Fetch all vouchers for this user BEFORE deleting
+    const userVouchers = await vouchersCollection.find({ userId: req.params.id }).toArray();
+    console.log(`🔍 Found ${userVouchers.length} vouchers for user ${req.params.id}`);
     
-    // Then delete the user
+    // STEP 2: Calculate income to deduct based on payment method
+    const incomeDeductions = {}; // { receiverName: { cashIncome: amount, bankIncome: amount } }
+    
+    for (const voucher of userVouchers) {
+      if (voucher.months && Array.isArray(voucher.months)) {
+        for (const month of voucher.months) {
+          // Skip reversed/refunded months
+          if (month.status === 'reversed' || month.refundDate || month.refundedAmount) {
+            continue;
+          }
+          
+          // Check payment history first (new structure)
+          const paymentHistory = month.paymentHistory || [];
+          
+          if (paymentHistory.length > 0) {
+            // New structure: Process each payment
+            for (const payment of paymentHistory) {
+              const receiver = payment.receivedBy || 'Admin';
+              const amount = parseFloat(payment.amount) || 0;
+              const paymentMethod = (payment.paymentMethod || '').trim().toLowerCase();
+              
+              if (amount > 0) {
+                if (!incomeDeductions[receiver]) {
+                  incomeDeductions[receiver] = { cashIncome: 0, bankIncome: 0 };
+                }
+                
+                if (paymentMethod === 'cash') {
+                  incomeDeductions[receiver].cashIncome += amount;
+                } else if (paymentMethod === 'bank transfer') {
+                  incomeDeductions[receiver].bankIncome += amount;
+                }
+                
+                console.log(`   💰 Deduct: ${receiver} - ${paymentMethod}: Rs ${amount}`);
+              }
+            }
+          } else if (month.receivedBy && (month.status === 'paid' || month.status === 'partial')) {
+            // Old structure: Single receivedBy field
+            const receiver = month.receivedBy;
+            const amount = parseFloat(month.paidAmount) || 0;
+            const paymentMethod = (month.paymentMethod || '').trim().toLowerCase();
+            
+            if (amount > 0) {
+              if (!incomeDeductions[receiver]) {
+                incomeDeductions[receiver] = { cashIncome: 0, bankIncome: 0 };
+              }
+              
+              if (paymentMethod === 'cash') {
+                incomeDeductions[receiver].cashIncome += amount;
+              } else if (paymentMethod === 'bank transfer') {
+                incomeDeductions[receiver].bankIncome += amount;
+              } else {
+                // If payment method not specified, deduct from cashIncome
+                incomeDeductions[receiver].cashIncome += amount;
+              }
+              
+              console.log(`   💰 Deduct (old): ${receiver} - ${paymentMethod || 'cash'}: Rs ${amount}`);
+            }
+          }
+        }
+      }
+    }
+    
+    // STEP 3: Update income collection - deduct amounts
+    for (const [receiver, deductions] of Object.entries(incomeDeductions)) {
+      const { cashIncome, bankIncome } = deductions;
+      
+      if (cashIncome > 0 || bankIncome > 0) {
+        const updateFields = {};
+        if (cashIncome > 0) updateFields.cashIncome = -cashIncome;
+        if (bankIncome > 0) updateFields.bankIncome = -bankIncome;
+        
+        await incomesCollection.updateOne(
+          { name: { $regex: new RegExp(`^${receiver.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+          { 
+            $inc: updateFields,
+            $set: { lastUpdated: new Date() }
+          }
+        );
+        
+        console.log(`✅ Deducted from ${receiver}: Cash -Rs ${cashIncome}, Bank -Rs ${bankIncome}`);
+      }
+    }
+    
+    // STEP 4: Delete all vouchers for this user
+    const vouchersResult = await vouchersCollection.deleteMany({ userId: req.params.id });
+    console.log(`🗑️ Deleted ${vouchersResult.deletedCount} vouchers for user ${req.params.id}`);
+    
+    // STEP 5: Delete the user
     const result = await usersCollection.deleteOne({ _id: userId });
     if (result.deletedCount === 0) {
       return res.status(404).json({
@@ -820,8 +907,9 @@ app.delete('/api/users/:id', async (req, res) => {
     
     res.status(200).json({
       success: true,
-      message: 'User and associated vouchers deleted successfully',
-      deletedVouchersCount: vouchersResult.deletedCount
+      message: 'User, vouchers, and income adjustments completed successfully',
+      deletedVouchersCount: vouchersResult.deletedCount,
+      incomeDeductions: incomeDeductions
     });
   } catch (error) {
     console.error('Error deleting user:', error);
