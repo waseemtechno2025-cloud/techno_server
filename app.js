@@ -2315,16 +2315,16 @@ app.get('/api/users/paid', async (req, res) => {
           });
         };
 
-        // CRITICAL: Only show fully 'paid' users in Paid tab, exclude 'partial' (they go to Balance tab)
-        const vouchers = await vouchersCollection.find({ 'months.status': 'paid' }).toArray();
+        // Include both 'paid' and 'partial' months (users with payments show in Paid tab)
+        const vouchers = await vouchersCollection.find({ 'months.status': { $in: ['paid', 'partial'] } }).toArray();
         const feeCollectorTrimmed = feeCollector ? feeCollector.trim() : null;
 
         const filteredVouchers = vouchers.filter((voucher) => {
           const months = Array.isArray(voucher.months) ? voucher.months : [];
-          // CRITICAL: Only check fully 'paid' months, exclude 'partial' (they go to Balance tab)
-          const paidMonths = months.filter((month) => month.status === 'paid');
+          // Include both 'paid' and 'partial' months (show users who made payments)
+          const paidOrPartialMonths = months.filter((month) => ['paid', 'partial'].includes(month.status));
 
-          const monthMatches = paidMonths.some((month) => {
+          const monthMatches = paidOrPartialMonths.some((month) => {
             // Check if date is in range
             const dateInRange = isDateInRange(month.createdAt) || isDateInRange(month.date) ||
               (Array.isArray(month.paymentHistory) && month.paymentHistory.some((entry) => isDateInRange(entry?.date)));
@@ -2353,8 +2353,8 @@ app.get('/api/users/paid', async (req, res) => {
           });
 
           if (monthMatches) {
-            // Calculate total collection from matched PAID months only (exclude partial)
-            paidMonths.forEach((month) => {
+            // Calculate total collection from matched paid/partial months
+            paidOrPartialMonths.forEach((month) => {
               const dateInRange = isDateInRange(month.createdAt) || isDateInRange(month.date) ||
                 (Array.isArray(month.paymentHistory) && month.paymentHistory.some((entry) => isDateInRange(entry?.date)));
               
@@ -2384,14 +2384,14 @@ app.get('/api/users/paid', async (req, res) => {
           }
 
           const topLevelMatch = (isDateInRange(voucher.createdAt) || isDateInRange(voucher.updatedAt));
-          return topLevelMatch && paidMonths.length > 0;
+          return topLevelMatch && paidOrPartialMonths.length > 0;
         });
 
         console.log(`📊 Query result: Found ${filteredVouchers.length} vouchers in date range ${fromDate} to ${toDate}${feeCollectorTrimmed ? ` (filtered by receivedBy: ${feeCollectorTrimmed})` : ''}`);
         console.log(`💰 Total collection amount: Rs ${totalCollectionAmount}`);
         
         userIds = filteredVouchers.map(v => v.userId);
-        console.log(`Found ${userIds.length} user(s) with PAID activity in date range (excluding partial)`);
+        console.log(`Found ${userIds.length} user(s) with paid/partial activity in date range`);
       } else {
         console.log(`⚠️ Invalid date range received: ${fromDate} to ${toDate}`);
       }
@@ -2456,16 +2456,16 @@ app.get('/api/users/paid', async (req, res) => {
           return normalized.some((iso) => iso === paymentDate);
         };
 
-        // CRITICAL: Only show fully 'paid' users in Paid tab, exclude 'partial' (they go to Balance tab)
-        const vouchers = await vouchersCollection.find({ 'months.status': 'paid' }).toArray();
+        // Include both 'paid' and 'partial' months (users with payments show in Paid tab)
+        const vouchers = await vouchersCollection.find({ 'months.status': { $in: ['paid', 'partial'] } }).toArray();
         const feeCollectorTrimmed = feeCollector ? feeCollector.trim() : null;
 
         const filteredVouchers = vouchers.filter((voucher) => {
           const months = Array.isArray(voucher.months) ? voucher.months : [];
-          // CRITICAL: Only check fully 'paid' months, exclude 'partial' (they go to Balance tab)
-          const paidMonths = months.filter((month) => month.status === 'paid');
+          // Include both 'paid' and 'partial' months (show users who made payments)
+          const paidOrPartialMonths = months.filter((month) => ['paid', 'partial'].includes(month.status));
 
-          const monthMatches = paidMonths.some((month) => {
+          const monthMatches = paidOrPartialMonths.some((month) => {
             // Check date match first
             const dateMatches = matchesPaymentDate(month.createdAt) || matchesPaymentDate(month.date) ||
               (Array.isArray(month.paymentHistory) && month.paymentHistory.some((entry) => matchesPaymentDate(entry?.date)));
@@ -2537,11 +2537,11 @@ app.get('/api/users/paid', async (req, res) => {
       
       allVouchers.forEach(voucher => {
         if (Array.isArray(voucher.months)) {
-          // Check if voucher has FULLY paid months (exclude 'partial')
+          // Check if voucher has paid or partial months (users who made payments)
           // If feeCollector filter is provided, also check receivedBy
           const hasPaidMonth = voucher.months.some(m => {
-            // CRITICAL: Only 'paid' status, NOT 'partial' (partial goes to Balance tab)
-            const isPaid = m.status === 'paid';
+            // Include both 'paid' and 'partial' status (show users who made payments)
+            const isPaid = m.status === 'paid' || m.status === 'partial';
             if (!isPaid) return false;
             
             // Check receivedBy filter
@@ -2603,7 +2603,7 @@ app.get('/api/users/paid', async (req, res) => {
       });
       
       usersWithPaidMonths = Array.from(userIdsWithPaidMonths);
-      console.log(`📊 Found ${usersWithPaidMonths.length} users with at least one paid month${feeCollectorTrimmed ? ` (filtered by receivedBy: ${feeCollectorTrimmed})` : ''}`);
+      console.log(`📊 Found ${usersWithPaidMonths.length} users with at least one paid/partial month${feeCollectorTrimmed ? ` (filtered by receivedBy: ${feeCollectorTrimmed})` : ''}`);
       
       // Debug: Log first few user IDs for verification
       if (usersWithPaidMonths.length > 0 && feeCollectorTrimmed) {
@@ -2611,7 +2611,9 @@ app.get('/api/users/paid', async (req, res) => {
       }
     }
     
-    // Base query - include users with paid status OR users with paid months
+    // Base query - include users with paid OR partial status
+    // CRITICAL: 'partial' users show in BOTH Paid tab (because they made payment) 
+    // AND Balance tab (because they have remaining amount)
     let query = {
       $and: [
         {
@@ -2621,8 +2623,9 @@ app.get('/api/users/paid', async (req, res) => {
       ]
         },
         {
-          // CRITICAL: Only show FULLY paid users, exclude 'partial' (they go to Balance tab)
-          status: 'paid'
+          // Include both 'paid' and 'partial' users
+          // Paid tab = Users who have made payments (including partial)
+          status: { $in: ['paid', 'partial'] }
         }
       ]
     };
@@ -6568,12 +6571,28 @@ app.post('/api/vouchers/convert-to-unpaid', ensureDbConnection, async (req, res)
     const totalPaid = nonReversedMonths.reduce((sum, m) => sum + (m.paidAmount || 0), 0);
     const totalRemaining = nonReversedMonths.reduce((sum, m) => sum + (m.remainingAmount || 0), 0);
     
+    // CRITICAL: Check if ANY month is unpaid
+    const hasUnpaidMonth = nonReversedMonths.some((m) => m.status === 'unpaid');
+    
     // Determine user status
+    // CRITICAL: If ANY month is unpaid (including the reversed one), status should be 'unpaid'
     let newStatus = 'unpaid';
-    if (totalRemaining === 0 && totalPaid > 0) {
+    if (hasUnpaidMonth) {
+      // If any month is unpaid, user status = 'unpaid' (show in Unpaid tab)
+      newStatus = 'unpaid';
+      console.log(`📊 Status: UNPAID (has ${nonReversedMonths.filter(m => m.status === 'unpaid').length} unpaid month(s))`);
+    } else if (totalRemaining === 0 && totalPaid > 0) {
+      // All months are fully paid
       newStatus = 'paid';
+      console.log(`📊 Status: PAID (all months paid)`);
     } else if (totalPaid > 0) {
+      // All months are partial (no unpaid months)
       newStatus = 'partial';
+      console.log(`📊 Status: PARTIAL (all months partial, no unpaid)`);
+    } else {
+      // No payments made
+      newStatus = 'unpaid';
+      console.log(`📊 Status: UNPAID (no payments)`);
     }
     
     // Update user
