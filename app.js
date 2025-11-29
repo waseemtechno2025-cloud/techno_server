@@ -1735,8 +1735,9 @@ app.get('/api/dashboard/stats', async (req, res) => {
       if (existingIncome && existingIncome.cashIncome > 0) {
         // Use existing income from database (don't recalculate)
         cashIncome = existingIncome.cashIncome || 0;
-        totalIncome = cashIncome;
-        console.log(`💰 Using existing income from database for ${feeCollectorTrimmed}: Cash Rs ${cashIncome}`);
+        bankIncome = existingIncome.bankIncome || 0;
+        totalIncome = cashIncome + bankIncome;
+        console.log(`💰 Using existing income from database for ${feeCollectorTrimmed}: Cash Rs ${cashIncome}, Bank Rs ${bankIncome}`);
       } else {
         // No income or cashIncome is 0, recalculate from vouchers
         shouldRecalculate = true;
@@ -1751,8 +1752,9 @@ app.get('/api/dashboard/stats', async (req, res) => {
       if (existingAdminIncome && existingAdminIncome.cashIncome > 0) {
         // Use existing income from database
         cashIncome = existingAdminIncome.cashIncome || 0;
-        totalIncome = cashIncome;
-        console.log(`💰 Using existing income from database for Admin: Cash Rs ${cashIncome}`);
+        bankIncome = existingAdminIncome.bankIncome || 0;
+        totalIncome = cashIncome + bankIncome;
+        console.log(`💰 Using existing income from database for Admin: Cash Rs ${cashIncome}, Bank Rs ${bankIncome}`);
       } else {
         // No income or cashIncome is 0, recalculate from vouchers
         shouldRecalculate = true;
@@ -2028,26 +2030,28 @@ app.get('/api/dashboard/stats', async (req, res) => {
         });
         
         if (existingIncome) {
-          // Update existing income - ONLY cashIncome
+          // Update existing income - cashIncome and bankIncome
           await incomesCollection.updateOne(
             { name: { $regex: new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
             { 
               $set: { 
                 cashIncome: cashIncome || 0,
+                bankIncome: bankIncome || 0,
                 lastUpdated: new Date()
               } 
             }
           );
-          console.log(`💰 Updated income for ${feeCollectorTrimmed}: Cash Rs ${cashIncome}`);
+          console.log(`💰 Updated income for ${feeCollectorTrimmed}: Cash Rs ${cashIncome}, Bank Rs ${bankIncome}`);
         } else {
-          // Create new income record - ONLY cashIncome
+          // Create new income record - cashIncome and bankIncome
           await incomesCollection.insertOne({
             name: feeCollectorTrimmed,
             cashIncome: cashIncome || 0,
+            bankIncome: bankIncome || 0,
             createdAt: new Date(),
             lastUpdated: new Date()
           });
-          console.log(`💰 Created new income record for ${feeCollectorTrimmed}: Cash Rs ${cashIncome}`);
+          console.log(`💰 Created new income record for ${feeCollectorTrimmed}: Cash Rs ${cashIncome}, Bank Rs ${bankIncome}`);
         }
       } else if (shouldRecalculate && !feeCollectorTrimmed) {
         // Admin ki income save/update karein (only if recalculated)
@@ -2056,26 +2060,28 @@ app.get('/api/dashboard/stats', async (req, res) => {
         });
         
         if (existingAdminIncome) {
-          // Update existing admin income - ONLY cashIncome
+          // Update existing admin income - cashIncome and bankIncome
           await incomesCollection.updateOne(
             { name: { $regex: new RegExp(`^Admin$`, 'i') } },
             { 
               $set: { 
                 cashIncome: cashIncome || 0,
+                bankIncome: bankIncome || 0,
                 lastUpdated: new Date()
               } 
             }
           );
-          console.log(`💰 Updated income for Admin: Cash Rs ${cashIncome}`);
+          console.log(`💰 Updated income for Admin: Cash Rs ${cashIncome}, Bank Rs ${bankIncome}`);
         } else {
-          // Create new admin income record - ONLY cashIncome
+          // Create new admin income record - cashIncome and bankIncome
           await incomesCollection.insertOne({
             name: 'Admin',
             cashIncome: cashIncome || 0,
+            bankIncome: bankIncome || 0,
             createdAt: new Date(),
             lastUpdated: new Date()
           });
-          console.log(`💰 Created new income record for Admin: Cash Rs ${cashIncome}`);
+          console.log(`💰 Created new income record for Admin: Cash Rs ${cashIncome}, Bank Rs ${bankIncome}`);
         }
       } else {
         // Using existing income, not overwriting
