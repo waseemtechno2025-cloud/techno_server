@@ -7396,7 +7396,18 @@ app.get('/api/collections/history/:feeCollector', ensureDbConnection, async (req
     
     // Process vouchers to find payments received by this fee collector
     allVouchers.forEach(voucher => {
-      const userName = voucher.userName || 'Unknown';
+      // Try multiple fields to get user name
+      const userName = voucher.userName || voucher.name || voucher.user || 'Unknown';
+      
+      // Debug log first voucher
+      if (collectionHistory.length === 0) {
+        console.log('📝 Sample voucher structure:', {
+          userName: voucher.userName,
+          name: voucher.name,
+          user: voucher.user,
+          hasMonths: !!voucher.months
+        });
+      }
       
       // Handle multi-month vouchers
       if (voucher.months && Array.isArray(voucher.months)) {
@@ -7488,6 +7499,15 @@ app.get('/api/collections/history/:feeCollector', ensureDbConnection, async (req
     });
     
     console.log(`✅ Found ${collectionHistory.length} collection records for ${feeCollectorName}`);
+    
+    // Log sample data for debugging
+    if (collectionHistory.length > 0) {
+      console.log('📝 Sample collection record:', {
+        userName: collectionHistory[0].userName,
+        amount: collectionHistory[0].amount,
+        paymentMethod: collectionHistory[0].paymentMethod
+      });
+    }
     
     res.status(200).json({
       success: true,
