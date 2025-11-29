@@ -3083,7 +3083,9 @@ app.get('/api/balances', async (req, res) => {
     // Simple logic: status = 'partial' means user has made some payment but has remaining amount
     // No need to check vouchers - user status is the source of truth
     
-    // Base query - include ONLY users with status 'partial' and remainingAmount > 0
+    // Base query - include users with status 'partial' OR 'superbalance'
+    // 'partial' = normal partial payment
+    // 'superbalance' = advance payment (all months balance button clicked)
     let query = {
       $and: [
         {
@@ -3092,13 +3094,18 @@ app.get('/api/balances', async (req, res) => {
             { serviceStatus: { $exists: false } }
           ]
         },
-        // CRITICAL: Only show users with status 'partial' (have made payment but have remaining)
-        { status: 'partial' },
-        { remainingAmount: { $gt: 0 } }
+        // CRITICAL: Show users with 'partial' OR 'superbalance' status
+        // 'superbalance' = advance payment tracking (shows ONLY in Balance tab)
+        { 
+          $or: [
+            { status: 'partial', remainingAmount: { $gt: 0 } },
+            { status: 'superbalance' }
+          ]
+        }
       ]
     };
     
-    console.log(`📊 Balance query: Fetching users with status='partial' and remainingAmount > 0`);
+    console.log(`📊 Balance query: Fetching users with status='partial' OR 'superbalance'`);
     
     // STRICT: Filter by fee collector if provided (case-insensitive) - ALWAYS apply
     if (feeCollector) {
@@ -4190,17 +4197,51 @@ app.post('/api/vouchers', async (req, res) => {
           console.log(`✅ Removed reversed months from refunds collection`);
         }
         
+        // CRITICAL: Convert all 'superbalance' months to 'unpaid' when new voucher is created
+        // This happens when expiry date arrives and new month voucher is generated
+        let hasSuperBalanceConverted = false;
+        const updatedMonths = sortedMonths.map(month => {
+          if (month.status === 'superbalance') {
+            console.log(`⚡ Converting superbalance month '${month.month}' to unpaid (new voucher created)`);
+            hasSuperBalanceConverted = true;
+            return {
+              ...month,
+              status: 'unpaid',
+              paidAmount: 0,
+              remainingAmount: month.packageFee - (month.discount || 0),
+              paymentHistory: []
+            };
+          }
+          return month;
+        });
+        
         // Update existing voucher with new months array (in FIFO order)
         const result = await vouchersCollection.updateOne(
           { userId },
           { 
             $set: { 
-              months: sortedMonths,
+              months: updatedMonths,
               rechargeDate: rechargeDate || existingVoucher.rechargeDate,
               expiryDate: expiryDate || existingVoucher.expiryDate
             } 
           }
         );
+        
+        // CRITICAL: If superbalance months were converted, update user status to 'unpaid'
+        if (hasSuperBalanceConverted) {
+          const usersCollection = db.collection('users');
+          const totalRemaining = updatedMonths.reduce((sum, m) => sum + (m.remainingAmount || 0), 0);
+          await usersCollection.updateOne(
+            { _id: new ObjectId(userId) },
+            { 
+              $set: { 
+                status: 'unpaid',
+                remainingAmount: totalRemaining
+              } 
+            }
+          );
+          console.log(`✅ User status updated from 'superbalance' to 'unpaid' (remaining: Rs ${totalRemaining})`);
+        }
         
         // 💰 UPDATE INCOME: Process payments and update receiver's income (ONLY cashIncome)
         for (const month of sortedMonths) {
