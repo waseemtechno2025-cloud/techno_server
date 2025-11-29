@@ -3567,6 +3567,8 @@ app.get('/api/expense/by-month', ensureDbConnection, async (req, res) => {
 app.get('/api/expense/:month', ensureDbConnection, async (req, res) => {
   try {
     const { month } = req.params;
+    const paidBy = req.query.paidBy; // Fee collector name filter
+    
     if (!month) {
       return res.status(400).json({
         success: false,
@@ -3575,7 +3577,16 @@ app.get('/api/expense/:month', ensureDbConnection, async (req, res) => {
     }
     
     const expensesCollection = db.collection('expenses');
-    const allExpenses = await expensesCollection.find({}).toArray();
+    
+    // Build query with paidBy filter if provided
+    const query = {};
+    if (paidBy) {
+      query.paidBy = { $regex: new RegExp(`^${paidBy.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') };
+      console.log(`💰 Expense for month ${month} - filtering by paidBy: ${paidBy}`);
+    }
+    
+    const allExpenses = await expensesCollection.find(query).toArray();
+    console.log(`💰 Found ${allExpenses.length} expenses${paidBy ? ` for ${paidBy}` : ''}`);
     
     // Filter expenses for the specified month
     const filteredExpenses = allExpenses.filter(expense => {
