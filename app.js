@@ -1988,30 +1988,26 @@ app.get('/api/dashboard/stats', async (req, res) => {
         });
         
         if (existingIncome) {
-          // Update existing income
+          // Update existing income - ONLY cashIncome
           await incomesCollection.updateOne(
             { name: { $regex: new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
             { 
               $set: { 
-                totalIncome: totalIncome,
                 cashIncome: cashIncome || 0,
-                bankIncome: bankIncome || 0,
                 lastUpdated: new Date()
               } 
             }
           );
-          console.log(`💰 Updated income for ${feeCollectorTrimmed}: Rs ${totalIncome} (Cash: ${cashIncome}, Bank: ${bankIncome})`);
+          console.log(`💰 Updated income for ${feeCollectorTrimmed}: Cash Rs ${cashIncome}`);
         } else {
-          // Create new income record
+          // Create new income record - ONLY cashIncome
           await incomesCollection.insertOne({
             name: feeCollectorTrimmed,
-            totalIncome: totalIncome,
             cashIncome: cashIncome || 0,
-            bankIncome: bankIncome || 0,
             createdAt: new Date(),
             lastUpdated: new Date()
           });
-          console.log(`💰 Created new income record for ${feeCollectorTrimmed}: Rs ${totalIncome} (Cash: ${cashIncome}, Bank: ${bankIncome})`);
+          console.log(`💰 Created new income record for ${feeCollectorTrimmed}: Cash Rs ${cashIncome}`);
         }
       } else {
         // Admin ki income save/update karein
@@ -2020,30 +2016,26 @@ app.get('/api/dashboard/stats', async (req, res) => {
         });
         
         if (existingAdminIncome) {
-          // Update existing admin income
+          // Update existing admin income - ONLY cashIncome
           await incomesCollection.updateOne(
             { name: { $regex: new RegExp(`^Admin$`, 'i') } },
             { 
               $set: { 
-                totalIncome: totalIncome,
                 cashIncome: cashIncome || 0,
-                bankIncome: bankIncome || 0,
                 lastUpdated: new Date()
               } 
             }
           );
-          console.log(`💰 Updated income for Admin: Rs ${totalIncome} (Cash: ${cashIncome}, Bank: ${bankIncome})`);
+          console.log(`💰 Updated income for Admin: Cash Rs ${cashIncome}`);
         } else {
-          // Create new admin income record
+          // Create new admin income record - ONLY cashIncome
           await incomesCollection.insertOne({
             name: 'Admin',
-            totalIncome: totalIncome,
             cashIncome: cashIncome || 0,
-            bankIncome: bankIncome || 0,
             createdAt: new Date(),
             lastUpdated: new Date()
           });
-          console.log(`💰 Created new income record for Admin: Rs ${totalIncome} (Cash: ${cashIncome}, Bank: ${bankIncome})`);
+          console.log(`💰 Created new income record for Admin: Cash Rs ${cashIncome}`);
         }
       }
     } catch (incomeError) {
@@ -3803,7 +3795,7 @@ app.post('/api/vouchers', async (req, res) => {
           }
         );
         
-        // 💰 UPDATE INCOME: Process payments and update receiver's income
+        // 💰 UPDATE INCOME: Process payments and update receiver's income (ONLY cashIncome)
         for (const month of sortedMonths) {
           if (month.status === 'paid' || month.status === 'partial') {
             // Check if month has paymentHistory (new structure) or receivedBy (old structure)
@@ -3819,8 +3811,8 @@ app.post('/api/vouchers', async (req, res) => {
                   await incomesCollection.updateOne(
                     { name: receiver },
                     { 
-                      $inc: { totalIncome: amount },
-                      $set: { updatedAt: new Date() },
+                      $inc: { cashIncome: amount },
+                      $set: { lastUpdated: new Date() },
                       $setOnInsert: { name: receiver, createdAt: new Date() }
                     },
                     { upsert: true }
@@ -3837,8 +3829,8 @@ app.post('/api/vouchers', async (req, res) => {
                 await incomesCollection.updateOne(
                   { name: receiver },
                   { 
-                    $inc: { totalIncome: amount },
-                    $set: { updatedAt: new Date() },
+                    $inc: { cashIncome: amount },
+                    $set: { lastUpdated: new Date() },
                     $setOnInsert: { name: receiver, createdAt: new Date() }
                   },
                   { upsert: true }
@@ -3867,7 +3859,7 @@ app.post('/api/vouchers', async (req, res) => {
         
         const result = await vouchersCollection.insertOne(newVoucher);
         
-        // 💰 UPDATE INCOME: Process payments and update receiver's income
+        // 💰 UPDATE INCOME: Process payments and update receiver's income (ONLY cashIncome)
         for (const month of sortedMonths) {
           if (month.status === 'paid' || month.status === 'partial') {
             // Check if month has paymentHistory (new structure) or receivedBy (old structure)
@@ -3883,8 +3875,8 @@ app.post('/api/vouchers', async (req, res) => {
                   await incomesCollection.updateOne(
                     { name: receiver },
                     { 
-                      $inc: { totalIncome: amount },
-                      $set: { updatedAt: new Date() },
+                      $inc: { cashIncome: amount },
+                      $set: { lastUpdated: new Date() },
                       $setOnInsert: { name: receiver, createdAt: new Date() }
                     },
                     { upsert: true }
@@ -3901,8 +3893,8 @@ app.post('/api/vouchers', async (req, res) => {
                 await incomesCollection.updateOne(
                   { name: receiver },
                   { 
-                    $inc: { totalIncome: amount },
-                    $set: { updatedAt: new Date() },
+                    $inc: { cashIncome: amount },
+                    $set: { lastUpdated: new Date() },
                     $setOnInsert: { name: receiver, createdAt: new Date() }
                   },
                   { upsert: true }
@@ -7085,12 +7077,12 @@ app.post('/api/incomes/sync', ensureDbConnection, async (req, res) => {
       }
     }
     
-    // Insert accumulated incomes into collection
-    const incomeRecords = Object.entries(incomeMap).map(([name, totalIncome]) => ({
+    // Insert accumulated incomes into collection (ONLY cashIncome)
+    const incomeRecords = Object.entries(incomeMap).map(([name, cashIncome]) => ({
       name,
-      totalIncome,
+      cashIncome,
       createdAt: new Date(),
-      updatedAt: new Date()
+      lastUpdated: new Date()
     }));
     
     if (incomeRecords.length > 0) {
@@ -7098,7 +7090,7 @@ app.post('/api/incomes/sync', ensureDbConnection, async (req, res) => {
       console.log(`💰 Inserted ${incomeRecords.length} income records`);
     }
     
-    // Subtract transferred amounts from fee collectors
+    // Subtract transferred amounts from fee collectors (ONLY cashIncome)
     const collectionsCollection = db.collection('collections');
     const transfers = await collectionsCollection.find({}).toArray();
     
@@ -7107,21 +7099,21 @@ app.post('/api/incomes/sync', ensureDbConnection, async (req, res) => {
       const amount = Number(transfer.amount || 0);
       
       if (feeCollector && amount > 0) {
-        // Decrease fee collector's income
+        // Decrease fee collector's cashIncome
         await incomesCollection.updateOne(
           { name: feeCollector },
           { 
-            $inc: { totalIncome: -amount },
-            $set: { updatedAt: new Date() }
+            $inc: { cashIncome: -amount },
+            $set: { lastUpdated: new Date() }
           }
         );
         
-        // Increase Admin's income
+        // Increase Admin's cashIncome
         await incomesCollection.updateOne(
           { name: 'Admin' },
           { 
-            $inc: { totalIncome: amount },
-            $set: { updatedAt: new Date() },
+            $inc: { cashIncome: amount },
+            $set: { lastUpdated: new Date() },
             $setOnInsert: { name: 'Admin', createdAt: new Date() }
           },
           { upsert: true }
@@ -7132,7 +7124,7 @@ app.post('/api/incomes/sync', ensureDbConnection, async (req, res) => {
     console.log(`💰 Processed ${transfers.length} transfers`);
     
     // Get final incomes
-    const finalIncomes = await incomesCollection.find({}).sort({ totalIncome: -1 }).toArray();
+    const finalIncomes = await incomesCollection.find({}).sort({ cashIncome: -1 }).toArray();
     
     res.status(200).json({
       success: true,
