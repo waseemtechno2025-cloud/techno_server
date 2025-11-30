@@ -2783,8 +2783,12 @@ app.get('/api/collections/my-collection', async (req, res) => {
       'months.status': { $in: ['paid', 'partial'] }
     }).toArray();
     
+    console.log(`🔍 Total vouchers with paid/partial months: ${vouchers.length}`);
+    
     const collections = [];
     let totalAmount = 0;
+    let skippedCount = 0;
+    let matchedMonthsCount = 0;
     
     // Get all users for mapping
     const allUsers = await usersCollection.find({}).toArray();
@@ -2801,56 +2805,37 @@ app.get('/api/collections/my-collection', async (req, res) => {
       for (const month of months) {
         if (!['paid', 'partial'].includes(month.status)) continue;
         
-        // Check month.receivedBy
-        const monthReceivedBy = month.receivedBy || '';
-        const monthMatchesCollector = collectorRegex.test(monthReceivedBy);
+        matchedMonthsCount++;
         
-        // Get payment date from month
-        const paymentDate = month.createdAt || month.date;
-        
-        if (paymentDate && monthMatchesCollector) {
-          // Normalize date to YYYY-MM-DD
-          let dateStr = '';
+        // Normalize date helper
+        const normalizeDate = (dateValue) => {
+          if (!dateValue) return null;
           try {
-            const d = new Date(paymentDate);
-            // Convert to Pakistan time
+            const d = new Date(dateValue);
+            // Convert to Pakistan time YYYY-MM-DD
             const pktDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(d);
-            dateStr = pktDate;
+            return pktDate;
           } catch (e) {
-            dateStr = paymentDate.split('T')[0];
+            if (typeof dateValue === 'string' && dateValue.includes('T')) {
+              return dateValue.split('T')[0];
+            }
+            return null;
           }
-          
-          // Check if date is in range
-          if (dateStr >= fromDate && dateStr <= toDate) {
-            collections.push({
-              userName,
-              amount: month.paidAmount || 0,
-              date: dateStr,
-              month: month.month,
-              receivedBy: monthReceivedBy
-            });
-            totalAmount += month.paidAmount || 0;
-          }
-        }
+        };
         
-        // Also check paymentHistory
+        // Check paymentHistory FIRST (more specific and accurate)
         const paymentHistory = Array.isArray(month.paymentHistory) ? month.paymentHistory : [];
+        let addedFromHistory = false;
+        
         for (const payment of paymentHistory) {
           const histReceivedBy = payment.receivedBy || '';
           const histMatchesCollector = collectorRegex.test(histReceivedBy);
           
-          if (histMatchesCollector && payment.date) {
-            let dateStr = '';
-            try {
-              const d = new Date(payment.date);
-              const pktDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(d);
-              dateStr = pktDate;
-            } catch (e) {
-              dateStr = payment.date.split('T')[0];
-            }
+          if (histMatchesCollector && payment.date && payment.amount) {
+            const dateStr = normalizeDate(payment.date);
             
             // Check if date is in range
-            if (dateStr >= fromDate && dateStr <= toDate) {
+            if (dateStr && dateStr >= fromDate && dateStr <= toDate) {
               collections.push({
                 userName,
                 amount: payment.amount || 0,
@@ -2859,6 +2844,60 @@ app.get('/api/collections/my-collection', async (req, res) => {
                 receivedBy: histReceivedBy
               });
               totalAmount += payment.amount || 0;
+              addedFromHistory = true;
+              
+              if (collections.length <= 3) {
+                console.log(`✅ Added from history: ${userName} - ${month.month} - Rs ${payment.amount} - ${dateStr} - receivedBy: ${histReceivedBy}`);
+              }
+            } else {
+              if (skippedCount < 3) {
+                console.log(`⏭️ Skipped (date out of range): ${userName} - ${dateStr} not in ${fromDate} to ${toDate}`);
+                skippedCount++;
+              }
+            }
+          } else if (histMatchesCollector) {
+            if (skippedCount < 3) {
+              console.log(`⏭️ Skipped (missing data): ${userName} - date: ${payment.date ? 'yes' : 'no'}, amount: ${payment.amount ? 'yes' : 'no'}`);
+              skippedCount++;
+            }
+          }
+        }
+        
+        // Only check month.receivedBy if NOT already added from paymentHistory
+        // This avoids duplicate entries for the same payment
+        if (!addedFromHistory) {
+          const monthReceivedBy = month.receivedBy || '';
+          const monthMatchesCollector = collectorRegex.test(monthReceivedBy);
+          
+          if (monthMatchesCollector) {
+            // Get payment date from month
+            const paymentDate = month.createdAt || month.date;
+            const dateStr = normalizeDate(paymentDate);
+            
+            // Check if date is in range
+            if (dateStr && dateStr >= fromDate && dateStr <= toDate) {
+              collections.push({
+                userName,
+                amount: month.paidAmount || 0,
+                date: dateStr,
+                month: month.month,
+                receivedBy: monthReceivedBy
+              });
+              totalAmount += month.paidAmount || 0;
+              
+              if (collections.length <= 3) {
+                console.log(`✅ Added from month: ${userName} - ${month.month} - Rs ${month.paidAmount} - ${dateStr} - receivedBy: ${monthReceivedBy}`);
+              }
+            } else {
+              if (skippedCount < 3) {
+                console.log(`⏭️ Skipped (date out of range): ${userName} - ${dateStr} not in ${fromDate} to ${toDate}`);
+                skippedCount++;
+              }
+            }
+          } else if (monthReceivedBy && !monthMatchesCollector) {
+            if (skippedCount < 3) {
+              console.log(`⏭️ Skipped (receivedBy mismatch): ${userName} - receivedBy: "${monthReceivedBy}" != "${collectorTrimmed}"`);
+              skippedCount++;
             }
           }
         }
@@ -2868,7 +2907,14 @@ app.get('/api/collections/my-collection', async (req, res) => {
     // Sort by date (most recent first)
     collections.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     
-    console.log(`✅ My Collection: Found ${collections.length} payments, Total: Rs ${totalAmount}`);
+    console.log(`\n📊 My Collection Summary:`);
+    console.log(`   Collector: "${collectorTrimmed}"`);
+    console.log(`   Date Range: ${fromDate} to ${toDate}`);
+    console.log(`   Total vouchers checked: ${vouchers.length}`);
+    console.log(`   Total paid/partial months: ${matchedMonthsCount}`);
+    console.log(`   ✅ Payments found: ${collections.length}`);
+    console.log(`   💰 Total Amount: Rs ${totalAmount}`);
+    console.log(`   ⏭️ Items skipped: ${skippedCount}+\n`);
     
     res.status(200).json({
       success: true,
