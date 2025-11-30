@@ -1867,8 +1867,9 @@ app.get('/api/dashboard/stats', async (req, res) => {
     console.log(`   - userIdsWithUnpaidMonthsSize: ${userIdsWithUnpaidMonths.size}`);
     console.log(`   - finalUnpaidUserIdsLength: ${finalUnpaidUserIds.length}`);
     
-    // Expiring soon (TOMORROW) - include paid/partial/unpaid/pending users based on expiry date
-    // NOTE: Include unpaid and pending so "Pay Later" and checkbox users also count when expiring tomorrow
+    // Expiring soon (TOMORROW) - only include users who haven't fully paid yet
+    // CRITICAL: Exclude 'paid' and 'superbalance' users - they should only appear in Paid Users
+    // Only show: unpaid, pending, partial (users who still need to pay)
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
@@ -1878,7 +1879,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
     
     // Build expiring soon query with filter
     let expiringSoonQuery = {
-      status: { $in: ['paid', 'partial', 'unpaid', 'pending', 'superbalance'] },
+      status: { $in: ['partial', 'unpaid', 'pending'] },
       expiryDate: { 
         $gte: tomorrow.toISOString(), 
         $lte: endOfTomorrow.toISOString() 
@@ -3644,8 +3645,10 @@ app.get('/api/users/expiring-soon', async (req, res) => {
     // Fetch users based on whether specific date is requested
     // If date is provided: fetch ALL active users (we'll filter by date later)
     // If no date: only fetch users marked by cron job with showInExpiringSoon flag
+    // CRITICAL: Only show users who haven't fully paid yet (unpaid, pending, partial)
+    // Exclude 'paid' and 'superbalance' - those users should only appear in Paid Users page
     const query = {
-      status: { $in: ['paid', 'partial', 'unpaid', 'pending', 'superbalance'] },
+      status: { $in: ['partial', 'unpaid', 'pending'] },
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
