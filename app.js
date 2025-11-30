@@ -1676,6 +1676,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
     };
     
     // Use userIds calculated from vouchers (receivedBy filter already applied)
+    // CRITICAL: Also filter by expiry date - only count users whose expiry has passed (after 12 PM)
     let paidUsers = 0;
     if (paidUserIds.length > 0) {
       paidUsersQuery._id = { $in: paidUserIds };
@@ -1685,8 +1686,49 @@ app.get('/api/dashboard/stats', async (req, res) => {
         paidUsersQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
       }
       
-      paidUsers = await usersCollection.countDocuments(paidUsersQuery);
-      console.log(`✅ Paid users count: ${paidUsers} (from ${paidUserIds.length} userIds)`);
+      // Get all users matching the basic query
+      const allPaidUsers = await usersCollection.find(paidUsersQuery).toArray();
+      
+      // Filter by expiry date - only count if expiry has passed (after 12 PM on expiry date)
+      const now = new Date();
+      const paidUsersWithExpiredDate = allPaidUsers.filter(user => {
+        if (!user.expiryDate) return true; // No expiry date, include it
+        
+        try {
+          let expiryDate;
+          const expiry = user.expiryDate;
+          
+          if (expiry instanceof Date) {
+            expiryDate = new Date(expiry);
+          } else if (typeof expiry === 'string') {
+            // Try different formats
+            if (/^\d{4}-\d{2}-\d{2}/.test(expiry)) {
+              expiryDate = new Date(expiry);
+            } else {
+              const parts = expiry.split(/[-\/]/);
+              if (parts.length >= 3) {
+                const [a, b, c] = parts;
+                if (a.length === 4) {
+                  expiryDate = new Date(a, parseInt(b) - 1, parseInt(c));
+                } else {
+                  expiryDate = new Date(c, parseInt(b) - 1, parseInt(a));
+                }
+              }
+            }
+          }
+          
+          if (!expiryDate || isNaN(expiryDate.getTime())) return true;
+          
+          // Set to 12 PM on expiry date
+          expiryDate.setHours(12, 0, 0, 0);
+          return expiryDate <= now; // Only count if expiry passed
+        } catch (error) {
+          return true; // Error, include it
+        }
+      });
+      
+      paidUsers = paidUsersWithExpiredDate.length;
+      console.log(`✅ Paid users count: ${paidUsers} (from ${paidUserIds.length} userIds, ${allPaidUsers.length} before expiry filter)`);
     } else {
       // CRITICAL: If no userIds found (no payments to this fee collector), return 0
       // Don't query all users, as that would count users paid to OTHER fee collectors
@@ -1694,7 +1736,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
       paidUsers = 0;
     }
     
-    console.log(`📊 FINAL - Paid users for ${feeCollector || assignTo || 'all'}: ${paidUsers}`);
+    console.log(`📊 FINAL - Paid users for ${feeCollector || assignTo || 'all'}: ${paidUsers} (filtered by expiry date)`);
     
     // Count unpaid users (users with at least one unpaid month) - exclude inactive
     // CRITICAL: For fee collector, use EXACT same logic as /api/users/unpaid endpoint
@@ -1864,9 +1906,10 @@ app.get('/api/dashboard/stats', async (req, res) => {
     console.log(`   - userIdsWithUnpaidMonthsSize: ${userIdsWithUnpaidMonths.size}`);
     console.log(`   - finalUnpaidUserIdsLength: ${finalUnpaidUserIds.length}`);
     
-    // Expiring soon (TOMORROW) - only include users who haven't fully paid yet
-    // CRITICAL: Exclude 'paid' and 'superbalance' users - they should only appear in Paid Users
-    // Only show: unpaid, pending, partial (users who still need to pay)
+    // Expiring soon (TOMORROW) - include ALL users expiring tomorrow
+    // CRITICAL: This is a REMINDER list, not a payment status list
+    // Show all users (paid, unpaid, partial, pending, superbalance) expiring tomorrow
+    // Stats counts are filtered by expiry date separately above
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
@@ -1876,7 +1919,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
     
     // Build expiring soon query with filter
     let expiringSoonQuery = {
-      status: { $in: ['partial', 'unpaid', 'pending'] },
+      status: { $in: ['paid', 'partial', 'unpaid', 'pending', 'superbalance'] },
       expiryDate: { 
         $gte: tomorrow.toISOString(), 
         $lte: endOfTomorrow.toISOString() 
@@ -3642,10 +3685,10 @@ app.get('/api/users/expiring-soon', async (req, res) => {
     // Fetch users based on whether specific date is requested
     // If date is provided: fetch ALL active users (we'll filter by date later)
     // If no date: only fetch users marked by cron job with showInExpiringSoon flag
-    // CRITICAL: Only show users who haven't fully paid yet (unpaid, pending, partial)
-    // Exclude 'paid' and 'superbalance' - those users should only appear in Paid Users page
+    // CRITICAL: Include ALL statuses for Expiring Soon (paid, unpaid, partial, pending, superbalance)
+    // This is a REMINDER list - users should see who's expiring tomorrow regardless of payment status
     const query = {
-      status: { $in: ['partial', 'unpaid', 'pending'] },
+      status: { $in: ['paid', 'partial', 'unpaid', 'pending', 'superbalance'] },
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
