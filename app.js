@@ -7910,13 +7910,17 @@ app.get('/api/incomes', ensureDbConnection, async (req, res) => {
 app.get('/api/incomes/:name', ensureDbConnection, async (req, res) => {
   try {
     const name = req.params.name;
-    const income = await incomesCollection.findOne({ name: name });
+    
+    // Use case-insensitive search to match transfer endpoint logic
+    const income = await incomesCollection.findOne({ 
+      name: { $regex: new RegExp(`^${name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } 
+    });
     
     if (!income) {
       return res.status(404).json({
         success: false,
         message: 'Income record not found',
-        data: { name, cashIncome: 0 }
+        data: { name, cashIncome: 0, bankIncome: 0 }
       });
     }
     
