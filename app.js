@@ -1655,6 +1655,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
     console.log(`📊 Dashboard Stats - Found ${userIdsWithPaidMonths.size} users with paid months${feeCollectorTrimmedForStats ? ` (filtered by receivedBy: ${feeCollectorTrimmedForStats})` : ''}`);
     
     // Count paid users (users with at least one paid month) - exclude inactive
+    // CRITICAL: Only count users who actually paid to THIS fee collector (based on receivedBy)
     const paidUserIds = Array.from(userIdsWithPaidMonths).map(id => {
       try {
         return new ObjectId(id);
@@ -1675,16 +1676,25 @@ app.get('/api/dashboard/stats', async (req, res) => {
     };
     
     // Use userIds calculated from vouchers (receivedBy filter already applied)
+    let paidUsers = 0;
     if (paidUserIds.length > 0) {
       paidUsersQuery._id = { $in: paidUserIds };
       console.log(`🔒 Dashboard Stats - Using userIds from vouchers (receivedBy filter): ${paidUserIds.length} users`);
+      
+      if (assignTo) {
+        paidUsersQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
+      }
+      
+      paidUsers = await usersCollection.countDocuments(paidUsersQuery);
+      console.log(`✅ Paid users count: ${paidUsers} (from ${paidUserIds.length} userIds)`);
+    } else {
+      // CRITICAL: If no userIds found (no payments to this fee collector), return 0
+      // Don't query all users, as that would count users paid to OTHER fee collectors
+      console.log(`📊 No paid users found for ${feeCollector || assignTo || 'this filter'}`);
+      paidUsers = 0;
     }
     
-    if (assignTo) {
-      paidUsersQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
-    }
-    
-    const paidUsers = await usersCollection.countDocuments(paidUsersQuery);
+    console.log(`📊 FINAL - Paid users for ${feeCollector || assignTo || 'all'}: ${paidUsers}`);
     
     // Count unpaid users (users with at least one unpaid month) - exclude inactive
     // CRITICAL: For fee collector, use EXACT same logic as /api/users/unpaid endpoint
