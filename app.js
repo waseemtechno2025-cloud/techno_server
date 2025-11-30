@@ -2752,6 +2752,140 @@ app.get('/api/users/paid', async (req, res) => {
   }
 });
 
+// GET my collection - Returns specific payments made by a collector with accurate dates
+app.get('/api/collections/my-collection', async (req, res) => {
+  try {
+    const vouchersCollection = db.collection('vouchers');
+    const usersCollection = db.collection('users');
+    const { fromDate, toDate, collector } = req.query;
+    
+    if (!collector) {
+      return res.status(400).json({
+        success: false,
+        message: 'Collector name is required'
+      });
+    }
+    
+    if (!fromDate || !toDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'Date range (fromDate and toDate) is required'
+      });
+    }
+    
+    console.log(`📊 Fetching My Collection for "${collector}" from ${fromDate} to ${toDate}`);
+    
+    const collectorTrimmed = collector.trim();
+    const collectorRegex = new RegExp(`^${collectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+    
+    // Get all vouchers with paid/partial months
+    const vouchers = await vouchersCollection.find({
+      'months.status': { $in: ['paid', 'partial'] }
+    }).toArray();
+    
+    const collections = [];
+    let totalAmount = 0;
+    
+    // Get all users for mapping
+    const allUsers = await usersCollection.find({}).toArray();
+    const userMap = new Map();
+    allUsers.forEach(user => {
+      userMap.set(user._id.toString(), user);
+    });
+    
+    for (const voucher of vouchers) {
+      const months = Array.isArray(voucher.months) ? voucher.months : [];
+      const user = userMap.get(voucher.userId?.toString());
+      const userName = user?.userName || 'Unknown User';
+      
+      for (const month of months) {
+        if (!['paid', 'partial'].includes(month.status)) continue;
+        
+        // Check month.receivedBy
+        const monthReceivedBy = month.receivedBy || '';
+        const monthMatchesCollector = collectorRegex.test(monthReceivedBy);
+        
+        // Get payment date from month
+        const paymentDate = month.createdAt || month.date;
+        
+        if (paymentDate && monthMatchesCollector) {
+          // Normalize date to YYYY-MM-DD
+          let dateStr = '';
+          try {
+            const d = new Date(paymentDate);
+            // Convert to Pakistan time
+            const pktDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(d);
+            dateStr = pktDate;
+          } catch (e) {
+            dateStr = paymentDate.split('T')[0];
+          }
+          
+          // Check if date is in range
+          if (dateStr >= fromDate && dateStr <= toDate) {
+            collections.push({
+              userName,
+              amount: month.paidAmount || 0,
+              date: dateStr,
+              month: month.month,
+              receivedBy: monthReceivedBy
+            });
+            totalAmount += month.paidAmount || 0;
+          }
+        }
+        
+        // Also check paymentHistory
+        const paymentHistory = Array.isArray(month.paymentHistory) ? month.paymentHistory : [];
+        for (const payment of paymentHistory) {
+          const histReceivedBy = payment.receivedBy || '';
+          const histMatchesCollector = collectorRegex.test(histReceivedBy);
+          
+          if (histMatchesCollector && payment.date) {
+            let dateStr = '';
+            try {
+              const d = new Date(payment.date);
+              const pktDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(d);
+              dateStr = pktDate;
+            } catch (e) {
+              dateStr = payment.date.split('T')[0];
+            }
+            
+            // Check if date is in range
+            if (dateStr >= fromDate && dateStr <= toDate) {
+              collections.push({
+                userName,
+                amount: payment.amount || 0,
+                date: dateStr,
+                month: month.month,
+                receivedBy: histReceivedBy
+              });
+              totalAmount += payment.amount || 0;
+            }
+          }
+        }
+      }
+    }
+    
+    // Sort by date (most recent first)
+    collections.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    
+    console.log(`✅ My Collection: Found ${collections.length} payments, Total: Rs ${totalAmount}`);
+    
+    res.status(200).json({
+      success: true,
+      data: collections,
+      totalAmount,
+      count: collections.length
+    });
+  } catch (error) {
+    console.error('Error fetching my collection:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching collection',
+      error: error.message
+    });
+  }
+});
+
 // GET unpaid users (with date filter and pagination)
 app.get('/api/users/unpaid', async (req, res) => {
   try {
