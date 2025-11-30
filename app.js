@@ -1730,12 +1730,55 @@ app.get('/api/dashboard/stats', async (req, res) => {
     
     // Now check vouchers for unpaid AND partial months
     // CRITICAL: Count users with EITHER unpaid OR partial months (or both)
+    // IMPORTANT: Only include users whose expiry date has passed (after 12 PM on expiry date)
     // This matches what user wants: unpaid + partial = total unpaid count in dashboard
     const userIdsWithUnpaidMonths = new Set();
     const userIdsWithPartialMonths = new Set();
     
+    // Helper function to check if expiry date has passed
+    const hasExpiryPassed = (expiryDate) => {
+      if (!expiryDate) return true; // No expiry date, include it
+      
+      try {
+        const now = new Date();
+        let expiry;
+        
+        if (expiryDate instanceof Date) {
+          expiry = new Date(expiryDate);
+        } else if (typeof expiryDate === 'string') {
+          // Try different formats
+          if (/^\d{4}-\d{2}-\d{2}/.test(expiryDate)) {
+            expiry = new Date(expiryDate);
+          } else {
+            const parts = expiryDate.split(/[-\/]/);
+            if (parts.length >= 3) {
+              const [a, b, c] = parts;
+              if (a.length === 4) {
+                expiry = new Date(a, parseInt(b) - 1, parseInt(c));
+              } else {
+                expiry = new Date(c, parseInt(b) - 1, parseInt(a));
+              }
+            }
+          }
+        }
+        
+        if (!expiry || isNaN(expiry.getTime())) return true;
+        
+        // Set to 12 PM on expiry date
+        expiry.setHours(12, 0, 0, 0);
+        return expiry <= now;
+      } catch (error) {
+        return true; // Error, include it
+      }
+    };
+    
     vouchersForUnpaidStats.forEach(voucher => {
       if (Array.isArray(voucher.months)) {
+        // CRITICAL: Only process if expiry date has passed
+        if (!hasExpiryPassed(voucher.expiryDate)) {
+          return; // Skip this voucher - not expired yet
+        }
+        
         // Check for unpaid months
         const hasUnpaidMonth = voucher.months.some(m => 
           m.status === 'unpaid' && !m.refundDate && !m.refundedAmount
@@ -1761,10 +1804,11 @@ app.get('/api/dashboard/stats', async (req, res) => {
     // Combine both sets: users with unpaid OR partial months
     const allUnpaidAndPartialUserIds = new Set([...userIdsWithUnpaidMonths, ...userIdsWithPartialMonths]);
     
-    console.log(`📊 Unpaid users calculation (unpaid + partial):`);
+    console.log(`📊 Unpaid users calculation (unpaid + partial, after expiry date filter):`);
     console.log(`   - Users with unpaid months: ${userIdsWithUnpaidMonths.size}`);
     console.log(`   - Users with partial months: ${userIdsWithPartialMonths.size}`);
     console.log(`   - Total (unpaid + partial): ${allUnpaidAndPartialUserIds.size}`);
+    console.log(`   - Note: Excludes users whose expiry date hasn't been reached (before 12 PM on expiry date)`);
     
     const unpaidUserIdsArray = Array.from(allUnpaidAndPartialUserIds);
     
@@ -3002,14 +3046,79 @@ app.get('/api/users/unpaid', async (req, res) => {
     
     // CRITICAL: Check vouchers for unpaid months instead of relying on user-level status
     // This ensures users with any unpaid months are included
+    // IMPORTANT: Only include users whose expiry date has passed (after 12 PM on expiry date)
+    // This prevents Pay Later users from showing before their expiry
+    
+    // Calculate cutoff time: today at 12 PM in Pakistan timezone
+    const now = new Date();
+    const todayNoon = new Date(now);
+    todayNoon.setHours(12, 0, 0, 0);
+    
+    console.log(`⏰ Current time: ${now.toISOString()}`);
+    console.log(`⏰ Cutoff time (12 PM today): ${todayNoon.toISOString()}`);
     
     // First, find all vouchers that have at least one unpaid month (not refunded)
-    const vouchersWithUnpaidMonths = await vouchersCollection.find({
+    // AND whose expiry date has passed (before today at 12 PM)
+    const allVouchersWithUnpaidMonths = await vouchersCollection.find({
       'months': { $elemMatch: { status: 'unpaid', refundDate: { $exists: false }, refundedAmount: { $exists: false } } }
-    }).project({ userId: 1 }).toArray();
+    }).toArray();
+    
+    // Filter vouchers: only include if expiry date has passed
+    const vouchersWithUnpaidMonths = allVouchersWithUnpaidMonths.filter(voucher => {
+      if (!voucher.expiryDate) return true; // No expiry date, include it
+      
+      try {
+        // Parse expiry date (can be in multiple formats)
+        let expiryDate;
+        const expiry = voucher.expiryDate;
+        
+        if (expiry instanceof Date) {
+          expiryDate = new Date(expiry);
+        } else if (typeof expiry === 'string') {
+          // Try different formats: YYYY-MM-DD, DD-MM-YYYY, DD/MM/YYYY
+          if (/^\d{4}-\d{2}-\d{2}/.test(expiry)) {
+            expiryDate = new Date(expiry);
+          } else {
+            const parts = expiry.split(/[-\/]/);
+            if (parts.length >= 3) {
+              const [a, b, c] = parts;
+              if (a.length === 4) {
+                // YYYY-MM-DD
+                expiryDate = new Date(a, parseInt(b) - 1, parseInt(c));
+              } else {
+                // DD-MM-YYYY or DD/MM/YYYY
+                expiryDate = new Date(c, parseInt(b) - 1, parseInt(a));
+              }
+            }
+          }
+        }
+        
+        if (!expiryDate || isNaN(expiryDate.getTime())) {
+          console.log(`⚠️ Invalid expiry date for voucher ${voucher._id}: ${expiry}`);
+          return true; // Can't parse, include it
+        }
+        
+        // Set expiry date to 12 PM (noon) on that day
+        expiryDate.setHours(12, 0, 0, 0);
+        
+        // Only include if expiry date + 12 PM has passed
+        const shouldInclude = expiryDate <= now;
+        
+        if (!shouldInclude) {
+          console.log(`🕐 Skipping voucher - not expired yet: ${expiry} (expires at 12 PM, now: ${now.toISOString()})`);
+        }
+        
+        return shouldInclude;
+      } catch (error) {
+        console.error(`Error parsing expiry date for voucher ${voucher._id}:`, error);
+        return true; // Error parsing, include it
+      }
+    });
     
     const userIdsWithUnpaidMonths = [...new Set(vouchersWithUnpaidMonths.map(v => v.userId))];
-    console.log(`📊 Found ${userIdsWithUnpaidMonths.length} users with unpaid months in vouchers`);
+    const filteredOut = allVouchersWithUnpaidMonths.length - vouchersWithUnpaidMonths.length;
+    console.log(`📊 Unpaid vouchers: ${allVouchersWithUnpaidMonths.length} total, ${vouchersWithUnpaidMonths.length} after expiry filter`);
+    console.log(`   🕐 Filtered out ${filteredOut} vouchers (expiry date not reached - before 12 PM on expiry date)`);
     
     // If no users have unpaid months, return empty result
     if (userIdsWithUnpaidMonths.length === 0) {
