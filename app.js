@@ -1857,16 +1857,17 @@ app.get('/api/dashboard/stats', async (req, res) => {
         name: { $regex: new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } 
       });
       
-      if (existingIncome && existingIncome.cashIncome > 0) {
+      if (existingIncome) {
         // Use existing income from database (don't recalculate)
+        // CRITICAL: Even if cashIncome is 0, use it! (could be 0 after transfer)
         cashIncome = existingIncome.cashIncome || 0;
         bankIncome = existingIncome.bankIncome || 0;
         totalIncome = cashIncome + bankIncome;
-        console.log(`💰 Using existing income from database for ${feeCollectorTrimmed}: Cash Rs ${cashIncome}, Bank Rs ${bankIncome}`);
+        console.log(`💰 Using existing income from database for ${feeCollectorTrimmed}: Cash Rs ${cashIncome}, Bank Rs ${bankIncome} (preserving transfers)`);
       } else {
-        // No income or cashIncome is 0, recalculate from vouchers
+        // No income record found, recalculate from vouchers
         shouldRecalculate = true;
-        console.log(`💰 No existing income found, calculating from vouchers for ${feeCollectorTrimmed}`);
+        console.log(`💰 No existing income record found, calculating from vouchers for ${feeCollectorTrimmed}`);
       }
     } else {
       // Admin - check existing income
@@ -1874,14 +1875,15 @@ app.get('/api/dashboard/stats', async (req, res) => {
         name: { $regex: new RegExp(`^Admin$`, 'i') } 
       });
       
-      if (existingAdminIncome && existingAdminIncome.cashIncome > 0) {
+      if (existingAdminIncome) {
         // Use existing income from database
+        // CRITICAL: Even if cashIncome is 0, use it! (could be 0 after expenses/transfers)
         cashIncome = existingAdminIncome.cashIncome || 0;
         bankIncome = existingAdminIncome.bankIncome || 0;
         totalIncome = cashIncome + bankIncome;
-        console.log(`💰 Using existing income from database for Admin: Cash Rs ${cashIncome}, Bank Rs ${bankIncome}`);
+        console.log(`💰 Using existing income from database for Admin: Cash Rs ${cashIncome}, Bank Rs ${bankIncome} (preserving transfers/expenses)`);
       } else {
-        // No income or cashIncome is 0, recalculate from vouchers
+        // No income record found, recalculate from vouchers
         shouldRecalculate = true;
         console.log(`💰 No existing income found, calculating from vouchers for Admin`);
       }
@@ -7449,11 +7451,19 @@ app.post('/api/collections/transfer', ensureDbConnection, async (req, res) => {
     
     console.log('🔵 Processing transfer: Fee Collector =', feeCollector.trim(), '| Amount = Rs', transferAmount);
     
+    // CRITICAL: Log database information
+    console.log('🔵 Database Info:', {
+      dbName: db.databaseName,
+      namespace: db.namespace,
+      client: !!db.client
+    });
+    
     // Get collections explicitly from db
     const incomesCol = db.collection('incomes');
     const vouchersCol = db.collection('vouchers');
     const transactionsCol = db.collection('transactions');
     console.log('🔵 Collections initialized:', { incomes: !!incomesCol, vouchers: !!vouchersCol, transactions: !!transactionsCol });
+    console.log('🔵 Incomes collection namespace:', incomesCol.namespace);
     
     // Check if fee collector has enough income to transfer
     const feeCollectorIncome = await incomesCol.findOne({ name: feeCollector.trim() });
