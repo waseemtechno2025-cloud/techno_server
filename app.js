@@ -7529,16 +7529,24 @@ app.post('/api/collections/transfer', ensureDbConnection, async (req, res) => {
     
     // 💰 UPDATE INCOME: Decrease fee collector's income and increase Admin's income
     // First, ensure the fee collector has an income record
-    console.log('🔍 Searching for fee collector income record:', feeCollector.trim());
+    const feeCollectorTrimmed = feeCollector.trim();
+    console.log('🔍 ===== INCOME UPDATE DEBUG =====');
+    console.log('🔍 Searching for fee collector income record:', feeCollectorTrimmed);
+    console.log('🔍 Search pattern:', `^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`);
+    
     const feeCollectorIncomeRecord = await incomesCol.findOne({ 
-      name: { $regex: new RegExp(`^${feeCollector.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } 
+      name: { $regex: new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } 
     });
-    console.log('🔍 Fee collector income record found:', feeCollectorIncomeRecord ? `Yes (Current cashIncome: Rs${feeCollectorIncomeRecord.cashIncome || 0})` : 'No');
+    console.log('🔍 Fee collector income record found:', feeCollectorIncomeRecord ? `Yes (ID: ${feeCollectorIncomeRecord._id}, Name: "${feeCollectorIncomeRecord.name}", Current cashIncome: Rs${feeCollectorIncomeRecord.cashIncome || 0})` : 'No');
     
     if (feeCollectorIncomeRecord) {
       // Update existing fee collector income - CUT from cashIncome ONLY
+      console.log(`💰 Updating fee collector income: ${feeCollectorTrimmed} -Rs${transferAmount}`);
+      console.log(`💰 Current cashIncome: Rs${feeCollectorIncomeRecord.cashIncome || 0}`);
+      console.log(`💰 After deduction should be: Rs${(feeCollectorIncomeRecord.cashIncome || 0) - transferAmount}`);
+      
       const updateResult = await incomesCol.updateOne(
-        { name: { $regex: new RegExp(`^${feeCollector.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+        { name: { $regex: new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
         { 
           $inc: { 
             cashIncome: -transferAmount  // Sirf cash se cut karo
@@ -7546,7 +7554,14 @@ app.post('/api/collections/transfer', ensureDbConnection, async (req, res) => {
           $set: { lastUpdated: new Date() }
         }
       );
-      console.log(`💰 Income decreased: ${feeCollector} -Rs${transferAmount} from CASH ONLY (matched: ${updateResult.matchedCount}, modified: ${updateResult.modifiedCount})`);
+      console.log(`💰 Update result: matched=${updateResult.matchedCount}, modified=${updateResult.modifiedCount}, acknowledged=${updateResult.acknowledged}`);
+      
+      // Verify the update
+      const verifyRecord = await incomesCol.findOne({ 
+        name: { $regex: new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } 
+      });
+      console.log(`💰 After update verification: cashIncome is now Rs${verifyRecord?.cashIncome || 0}`);
+      console.log('🔍 ===== END INCOME UPDATE DEBUG =====');
     } else {
       console.log(`⚠️ Warning: ${feeCollector} has no income record in incomes collection. Creating one with negative balance.`);
       // Create a new record with negative balance
