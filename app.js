@@ -1844,23 +1844,20 @@ app.get('/api/dashboard/stats', async (req, res) => {
       unpaidUsersQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
     }
     
-    // CRITICAL: Calculate unpaid users including users with NO vouchers
-    // Formula: unpaidUsers = totalUsers - paidUsers
+    // CRITICAL: Use voucher-based unpaid count (includes expiry filter)
+    // This ensures users only show as unpaid AFTER their expiry date passes (12 PM)
     // 
-    // Example scenario:
-    //   - Admin assigns new user "Ali" to Umer (no payments yet)
-    //   - Umer's dashboard: totalUsers = 1, paidUsers = 0, unpaidUsers = 1 ✓
-    //   - MohdAli's dashboard: totalUsers = 0, paidUsers = 0, unpaidUsers = 0 ✓
+    // Example scenarios:
+    //   - User created today with expiry tomorrow → unpaidUsers = 0 (expiry not passed) ✓
+    //   - User expired yesterday → unpaidUsers = 1 (expiry passed) ✓
+    //   - Pay Later user created today → unpaidUsers = 0 (not expired yet) ✓
     //
-    // This ensures newly assigned users (with no vouchers/payments yet) show as unpaid
-    let unpaidUsersFromVouchers = unpaidUserIds.length > 0 ? await usersCollection.countDocuments(unpaidUsersQuery) : 0;
-    
-    const unpaidUsers = Math.max(0, totalUsers - paidUsers);
+    // This prevents newly created Pay Later users from showing in unpaid count immediately
+    const unpaidUsers = unpaidUserIds.length > 0 ? await usersCollection.countDocuments(unpaidUsersQuery) : 0;
     
     console.log(`📊 Dashboard Stats - Unpaid users calculation:`);
-    console.log(`   - unpaidUsersFromVouchers: ${unpaidUsersFromVouchers}`);
-    console.log(`   - totalUsers: ${totalUsers}, paidUsers: ${paidUsers}`);
-    console.log(`   - finalUnpaidUsers (totalUsers - paidUsers): ${unpaidUsers}`);
+    console.log(`   - totalUsers: ${totalUsers}, paidUsers: ${paidUsers}, unpaidUsers: ${unpaidUsers}`);
+    console.log(`   - Unpaid users filtered by expiry date (only those past 12 PM on expiry date)`);
     console.log(`   - initialVouchers: ${await vouchersCol.countDocuments({})}`);
     console.log(`   - vouchersAfterAssignToFilter: ${assignTo ? vouchersForStats.length : 'N/A'}`);
     console.log(`   - vouchersAfterFeeCollectorPreFilter: ${feeCollector ? (unpaidUsersFilteredByIds ? vouchersForUnpaidStats.length : 'N/A') : 'N/A'}`);
@@ -3730,10 +3727,10 @@ app.get('/api/users/expiring-soon', async (req, res) => {
       
       filtered = mapped.filter(({ ymd }) => {
         if (!ymd) return false;
-        // Show only if expiring today or tomorrow
-        const isToday = (ymd.y === todayY && ymd.m === todayM && ymd.d === todayD);
+        // Show users expiring TOMORROW
+        // This includes Pay Later users created today
         const isTomorrow = (ymd.y === tomorrowY && ymd.m === tomorrowM && ymd.d === tomorrowD);
-        return isToday || isTomorrow;
+        return isTomorrow;
       });
     }
     
