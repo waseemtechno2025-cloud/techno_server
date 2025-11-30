@@ -2289,10 +2289,12 @@ app.get('/api/users/paid', async (req, res) => {
       if (!Number.isNaN(fromYear) && !Number.isNaN(fromMonth) && !Number.isNaN(fromDay) &&
           !Number.isNaN(toYear) && !Number.isNaN(toMonth) && !Number.isNaN(toDay)) {
         
-        const startOfRange = new Date(fromYear, fromMonth, fromDay, 0, 0, 0, 0);
-        const endOfRange = new Date(toYear, toMonth, toDay + 1, 0, 0, 0, 0); // End of toDate
+        // CRITICAL: Use PKT (UTC+5) timezone for date comparison
+        // Create date strings in YYYY-MM-DD format for simple string comparison
+        const startDateStr = `${fromYear}-${String(fromMonth + 1).padStart(2, '0')}-${String(fromDay).padStart(2, '0')}`;
+        const endDateStr = `${toYear}-${String(toMonth + 1).padStart(2, '0')}-${String(toDay).padStart(2, '0')}`;
 
-        console.log(`📅 Date range filter: ${fromDate} to ${toDate} → window ${startOfRange.toISOString()} to ${endOfRange.toISOString()}`);
+        console.log(`📅 Date range filter: ${startDateStr} to ${endDateStr} (using PKT string comparison)`);
 
         const formatToIso = (date) => date.toISOString().split('T')[0];
         const formatToLocal = (date) => {
@@ -2306,21 +2308,25 @@ app.get('/api/users/paid', async (req, res) => {
         const normalizeToIsoString = (value) => {
           if (!value) return null;
           if (value instanceof Date) {
-            return [formatToIso(value), formatToLocal(value)];
+            // Prioritize PKT timezone format
+            return [formatToLocal(value)];
           }
 
           if (typeof value === 'string') {
             const native = new Date(value);
             if (!Number.isNaN(native.getTime())) {
-              return [formatToIso(native), formatToLocal(native)];
+              // Prioritize PKT timezone format
+              return [formatToLocal(native)];
             }
 
             const parts = value.split(/[-\/]/);
             if (parts.length === 3) {
               let [a, b, c] = parts;
               if (a.length === 4) {
+                // Already YYYY-MM-DD format
                 return [`${a}-${b.padStart(2, '0')}-${c.padStart(2, '0')}`];
               }
+              // DD-MM-YYYY or DD/MM/YYYY format - convert to YYYY-MM-DD
               const dayPart = a.padStart(2, '0');
               const monthPart = b.padStart(2, '0');
               const yearPart = c;
@@ -2335,9 +2341,11 @@ app.get('/api/users/paid', async (req, res) => {
           const normalized = normalizeToIsoString(value);
           if (!normalized) return false;
           
+          // Use PKT timezone string comparison (YYYY-MM-DD format)
           return normalized.some((isoDate) => {
-            const checkDate = new Date(isoDate);
-            return checkDate >= startOfRange && checkDate < endOfRange;
+            // isoDate is already in YYYY-MM-DD format
+            // Simple string comparison works because YYYY-MM-DD sorts correctly
+            return isoDate >= startDateStr && isoDate <= endDateStr;
           });
         };
 
@@ -2755,6 +2763,7 @@ app.get('/api/users/unpaid', async (req, res) => {
     const unpaidDate = req.query.unpaidDate; // YYYY-MM-DD format - date user became unpaid
     const feeCollector = req.query.feeCollector; // Fee collector name filter
     const assignTo = req.query.assignTo; // Technician assignment filter
+    const search = req.query.search; // Search by name, phone, userId
     
     // CRITICAL: Check vouchers for unpaid months instead of relying on user-level status
     // This ensures users with any unpaid months are included
@@ -2804,6 +2813,24 @@ app.get('/api/users/unpaid', async (req, res) => {
       if (assignToTrimmed) {
         query.$and.push({ assignTo: { $regex: new RegExp(`^${assignToTrimmed}$`, 'i') } });
         console.log(`🔒 STRICT: Filtering /api/users/unpaid by assignTo (technician, case-insensitive): ${assignToTrimmed}`);
+      }
+    }
+    
+    // Search filter - search by userName, simNo, whatsappNo, userId, streetName
+    if (search) {
+      const searchTrimmed = search.trim();
+      if (searchTrimmed) {
+        const searchRegex = new RegExp(searchTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+        query.$and.push({
+          $or: [
+            { userName: searchRegex },
+            { simNo: searchRegex },
+            { whatsappNo: searchRegex },
+            { userId: searchRegex },
+            { streetName: searchRegex }
+          ]
+        });
+        console.log(`🔍 Searching unpaid users by: "${searchTrimmed}"`);
       }
     }
     
@@ -3104,6 +3131,7 @@ app.get('/api/balances', async (req, res) => {
     const expiryDate = req.query.expiryDate; // YYYY-MM-DD format
     const feeCollector = req.query.feeCollector; // Fee collector name filter
     const assignTo = req.query.assignTo; // Technician assignment filter
+    const search = req.query.search; // Search by name, phone, userId
     
     // CRITICAL: Balance tab should show ONLY users with status 'partial'
     // Simple logic: status = 'partial' means user has made some payment but has remaining amount
@@ -3148,6 +3176,24 @@ app.get('/api/balances', async (req, res) => {
       if (assignToTrimmed) {
         query.$and.push({ assignTo: { $regex: new RegExp(`^${assignToTrimmed}$`, 'i') } });
         console.log(`🔒 STRICT: Filtering /api/balances by assignTo (technician, case-insensitive): ${assignToTrimmed}`);
+      }
+    }
+    
+    // Search filter - search by userName, simNo, whatsappNo, userId, streetName
+    if (search) {
+      const searchTrimmed = search.trim();
+      if (searchTrimmed) {
+        const searchRegex = new RegExp(searchTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+        query.$and.push({
+          $or: [
+            { userName: searchRegex },
+            { simNo: searchRegex },
+            { whatsappNo: searchRegex },
+            { userId: searchRegex },
+            { streetName: searchRegex }
+          ]
+        });
+        console.log(`🔍 Searching balance users by: "${searchTrimmed}"`);
       }
     }
     
