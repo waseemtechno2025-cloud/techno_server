@@ -871,24 +871,39 @@ app.delete('/api/users/:id', async (req, res) => {
       }
     }
     
-    // STEP 3: Update income collection - deduct amounts
+    // STEP 3: Update income collection - deduct amounts (prevent negative values)
     for (const [receiver, deductions] of Object.entries(incomeDeductions)) {
       const { cashIncome, bankIncome } = deductions;
       
       if (cashIncome > 0 || bankIncome > 0) {
-        const updateFields = {};
-        if (cashIncome > 0) updateFields.cashIncome = -cashIncome;
-        if (bankIncome > 0) updateFields.bankIncome = -bankIncome;
+        // CRITICAL: Fetch current income first to prevent negative values
+        const currentIncomeRecord = await incomesCollection.findOne({
+          name: { $regex: new RegExp(`^${receiver.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+        });
         
-        await incomesCollection.updateOne(
-          { name: { $regex: new RegExp(`^${receiver.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
-          { 
-            $inc: updateFields,
-            $set: { lastUpdated: new Date() }
-          }
-        );
-        
-        console.log(`✅ Deducted from ${receiver}: Cash -Rs ${cashIncome}, Bank -Rs ${bankIncome}`);
+        if (currentIncomeRecord) {
+          const currentCash = currentIncomeRecord.cashIncome || 0;
+          const currentBank = currentIncomeRecord.bankIncome || 0;
+          
+          // Calculate new values (don't go below 0)
+          const newCash = Math.max(0, currentCash - cashIncome);
+          const newBank = Math.max(0, currentBank - bankIncome);
+          
+          await incomesCollection.updateOne(
+            { name: { $regex: new RegExp(`^${receiver.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+            { 
+              $set: { 
+                cashIncome: newCash,
+                bankIncome: newBank,
+                lastUpdated: new Date() 
+              }
+            }
+          );
+          
+          console.log(`✅ Deducted from ${receiver}: Cash Rs ${currentCash} → Rs ${newCash}, Bank Rs ${currentBank} → Rs ${newBank}`);
+        } else {
+          console.log(`⚠️ No income record found for ${receiver}, skipping deduction`);
+        }
       }
     }
     
@@ -1553,7 +1568,12 @@ app.get('/api/dashboard/stats', async (req, res) => {
     }
     
     // Total users (with filter if provided)
+    // CRITICAL: Count ALL assigned users (regardless of payment status)
+    // This ensures when admin assigns a user to a fee collector:
+    //   - Umer gets user assigned → Umer's dashboard shows totalUsers = 1 immediately
+    //   - MohdAli's dashboard shows totalUsers = 0 (only counts his assigned users)
     const totalUsers = await usersCollection.countDocuments(userFilter);
+    console.log(`📊 Total users (assigned to ${feeCollector || assignTo || 'all'}): ${totalUsers}`);
     
     // CRITICAL: Month-level counting - count users with AT LEAST ONE paid month
     // IMPORTANT: For paid users, we check receivedBy in vouchers directly (same as paid-users endpoint)
@@ -1770,15 +1790,28 @@ app.get('/api/dashboard/stats', async (req, res) => {
       unpaidUsersQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
     }
     
-    const unpaidUsers = unpaidUserIds.length > 0 ? await usersCollection.countDocuments(unpaidUsersQuery) : 0;
+    // CRITICAL: Calculate unpaid users including users with NO vouchers
+    // Formula: unpaidUsers = totalUsers - paidUsers
+    // 
+    // Example scenario:
+    //   - Admin assigns new user "Ali" to Umer (no payments yet)
+    //   - Umer's dashboard: totalUsers = 1, paidUsers = 0, unpaidUsers = 1 ✓
+    //   - MohdAli's dashboard: totalUsers = 0, paidUsers = 0, unpaidUsers = 0 ✓
+    //
+    // This ensures newly assigned users (with no vouchers/payments yet) show as unpaid
+    let unpaidUsersFromVouchers = unpaidUserIds.length > 0 ? await usersCollection.countDocuments(unpaidUsersQuery) : 0;
+    
+    const unpaidUsers = Math.max(0, totalUsers - paidUsers);
     
     console.log(`📊 Dashboard Stats - Unpaid users calculation:`);
+    console.log(`   - unpaidUsersFromVouchers: ${unpaidUsersFromVouchers}`);
+    console.log(`   - totalUsers: ${totalUsers}, paidUsers: ${paidUsers}`);
+    console.log(`   - finalUnpaidUsers (totalUsers - paidUsers): ${unpaidUsers}`);
     console.log(`   - initialVouchers: ${await vouchersCol.countDocuments({})}`);
     console.log(`   - vouchersAfterAssignToFilter: ${assignTo ? vouchersForStats.length : 'N/A'}`);
     console.log(`   - vouchersAfterFeeCollectorPreFilter: ${feeCollector ? (unpaidUsersFilteredByIds ? vouchersForUnpaidStats.length : 'N/A') : 'N/A'}`);
     console.log(`   - userIdsWithUnpaidMonthsSize: ${userIdsWithUnpaidMonths.size}`);
     console.log(`   - finalUnpaidUserIdsLength: ${finalUnpaidUserIds.length}`);
-    console.log(`   - unpaidUsersCount: ${unpaidUsers}${feeCollector ? ` (filtered by feeCollector: ${feeCollector.trim()})` : ''}${assignTo ? ` (filtered by assignTo: ${assignTo.trim()})` : ''}`);
     
     // Expiring soon (TOMORROW) - include paid/partial/unpaid/pending users based on expiry date
     // NOTE: Include unpaid and pending so "Pay Later" and checkbox users also count when expiring tomorrow
