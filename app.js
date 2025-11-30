@@ -2778,6 +2778,14 @@ app.get('/api/collections/my-collection', async (req, res) => {
     const collectorTrimmed = collector.trim();
     const collectorRegex = new RegExp(`^${collectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
     
+    // For backward compatibility: Also match "Myself" if searching for admin
+    const isAdminSearch = /^admin$/i.test(collectorTrimmed);
+    const shouldMatchMyself = isAdminSearch;
+    
+    if (shouldMatchMyself) {
+      console.log(`🔧 Backward compatibility enabled: Will also match "Myself" payments for admin`);
+    }
+    
     // Get all vouchers with paid/partial months
     const vouchers = await vouchersCollection.find({
       'months.status': { $in: ['paid', 'partial'] }
@@ -2829,7 +2837,8 @@ app.get('/api/collections/my-collection', async (req, res) => {
         
         for (const payment of paymentHistory) {
           const histReceivedBy = payment.receivedBy || '';
-          const histMatchesCollector = collectorRegex.test(histReceivedBy);
+          const histMatchesCollector = collectorRegex.test(histReceivedBy) || 
+                                       (shouldMatchMyself && histReceivedBy.toLowerCase() === 'myself');
           
           if (histMatchesCollector && payment.date && payment.amount) {
             const dateStr = normalizeDate(payment.date);
@@ -2867,7 +2876,8 @@ app.get('/api/collections/my-collection', async (req, res) => {
         // This avoids duplicate entries for the same payment
         if (!addedFromHistory) {
           const monthReceivedBy = month.receivedBy || '';
-          const monthMatchesCollector = collectorRegex.test(monthReceivedBy);
+          const monthMatchesCollector = collectorRegex.test(monthReceivedBy) || 
+                                        (shouldMatchMyself && monthReceivedBy.toLowerCase() === 'myself');
           
           if (monthMatchesCollector) {
             // Get payment date from month
