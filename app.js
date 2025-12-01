@@ -1686,10 +1686,18 @@ app.get('/api/dashboard/stats', async (req, res) => {
         paidUsersQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
       }
       
-      // Count all paid users (no expiry date filter)
+      // Exclude users expiring TODAY or TOMORROW (expiring soon users)
+      paidUsersQuery.$and = [
+        { $or: [
+          { showInExpiringSoon: { $ne: true } },
+          { showInExpiringSoon: { $exists: false } }
+        ]}
+      ];
+      
+      // Count all paid users (excluding expiring soon)
       // This ensures dashboard stats match paid-users page
       paidUsers = await usersCollection.countDocuments(paidUsersQuery);
-      console.log(`✅ Paid users count: ${paidUsers} (from ${paidUserIds.length} userIds with paid status)`);
+      console.log(`✅ Paid users count: ${paidUsers} (from ${paidUserIds.length} userIds with paid status, excluding expiring soon)`);
     } else {
       // CRITICAL: If no userIds found (no payments to this fee collector), return 0
       // Don't query all users, as that would count users paid to OTHER fee collectors
@@ -1846,6 +1854,14 @@ app.get('/api/dashboard/stats', async (req, res) => {
     if (assignTo) {
       unpaidUsersQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
     }
+    
+    // Exclude users expiring TODAY or TOMORROW (expiring soon users)
+    unpaidUsersQuery.$and = [
+      { $or: [
+        { showInExpiringSoon: { $ne: true } },
+        { showInExpiringSoon: { $exists: false } }
+      ]}
+    ];
     
     // CRITICAL: Use voucher-based unpaid count (includes expiry filter)
     // This ensures users only show as unpaid AFTER their expiry date passes (12 PM)
@@ -2890,6 +2906,30 @@ app.get('/api/users/paid', async (req, res) => {
       });
     }
     
+    // CRITICAL: Exclude users expiring TODAY or TOMORROW (expiring soon users)
+    // These users should only show in Expiring Soon tab, not in Paid/Unpaid tabs
+    const nowUTC = new Date();
+    const nowInPKT = new Date(nowUTC.getTime() + PKT_OFFSET_MIN * 60000);
+    const todayY = nowInPKT.getUTCFullYear();
+    const todayM = nowInPKT.getUTCMonth();
+    const todayD = nowInPKT.getUTCDate();
+    
+    // Calculate tomorrow's date
+    const tomorrowDate = new Date(Date.UTC(todayY, todayM, todayD + 1));
+    const tomorrowY = tomorrowDate.getUTCFullYear();
+    const tomorrowM = tomorrowDate.getUTCMonth();
+    const tomorrowD = tomorrowDate.getUTCDate();
+    
+    // Exclude users with showInExpiringSoon flag (cron job marks users expiring today/tomorrow)
+    query.$and.push({ 
+      $or: [
+        { showInExpiringSoon: { $ne: true } },
+        { showInExpiringSoon: { $exists: false } }
+      ]
+    });
+    
+    console.log(`🚫 Excluding users with showInExpiringSoon flag from Paid Users list`);
+    
     const totalCount = await usersCollection.countDocuments(query);
     const users = await usersCollection
       .find(query)
@@ -3374,6 +3414,17 @@ app.get('/api/users/unpaid', async (req, res) => {
       
       console.log(`🔍 Unpaid Query with date filter:`, JSON.stringify(query, null, 2));
     }
+    
+    // CRITICAL: Exclude users expiring TODAY or TOMORROW (expiring soon users)
+    // These users should only show in Expiring Soon tab, not in Paid/Unpaid tabs
+    query.$and.push({ 
+      $or: [
+        { showInExpiringSoon: { $ne: true } },
+        { showInExpiringSoon: { $exists: false } }
+      ]
+    });
+    
+    console.log(`🚫 Excluding users with showInExpiringSoon flag from Unpaid Users list`);
     
     // Log final query for debugging
     console.log(`🔍 Final Unpaid Query:`, JSON.stringify(query, null, 2));
