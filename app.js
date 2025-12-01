@@ -3159,89 +3159,13 @@ app.get('/api/users/unpaid', async (req, res) => {
     const assignTo = req.query.assignTo; // Technician assignment filter
     const search = req.query.search; // Search by name, phone, userId
     
-    // CRITICAL: Check vouchers for unpaid months instead of relying on user-level status
-    // This ensures users with any unpaid months are included
-    // IMPORTANT: Only include users whose expiry date has passed (after 12 PM on expiry date)
-    // This prevents Pay Later users from showing before their expiry
+    // CRITICAL: Query users directly by status='unpaid' or 'partial'
+    // This includes Pay Later users with future expiry dates immediately
+    // We exclude only expiring soon users (those expiring today/tomorrow)
     
-    // Calculate cutoff time: today at 12 PM in Pakistan timezone
-    const now = new Date();
-    const todayNoon = new Date(now);
-    todayNoon.setHours(12, 0, 0, 0);
+    console.log(`📊 Fetching unpaid users by status (including future expiry dates)`);
     
-    console.log(`⏰ Current time: ${now.toISOString()}`);
-    console.log(`⏰ Cutoff time (12 PM today): ${todayNoon.toISOString()}`);
-    
-    // First, find all vouchers that have at least one unpaid month (not refunded)
-    // AND whose expiry date has passed (before today at 12 PM)
-    const allVouchersWithUnpaidMonths = await vouchersCollection.find({
-      'months': { $elemMatch: { status: 'unpaid', refundDate: { $exists: false }, refundedAmount: { $exists: false } } }
-    }).toArray();
-    
-    // Filter vouchers: only include if expiry date has passed
-    const vouchersWithUnpaidMonths = allVouchersWithUnpaidMonths.filter(voucher => {
-      if (!voucher.expiryDate) return true; // No expiry date, include it
-      
-      try {
-        // Parse expiry date (can be in multiple formats)
-        let expiryDate;
-        const expiry = voucher.expiryDate;
-        
-        if (expiry instanceof Date) {
-          expiryDate = new Date(expiry);
-        } else if (typeof expiry === 'string') {
-          // Try different formats: YYYY-MM-DD, DD-MM-YYYY, DD/MM/YYYY
-          if (/^\d{4}-\d{2}-\d{2}/.test(expiry)) {
-            expiryDate = new Date(expiry);
-          } else {
-            const parts = expiry.split(/[-\/]/);
-            if (parts.length >= 3) {
-              const [a, b, c] = parts;
-              if (a.length === 4) {
-                // YYYY-MM-DD
-                expiryDate = new Date(a, parseInt(b) - 1, parseInt(c));
-              } else {
-                // DD-MM-YYYY or DD/MM/YYYY
-                expiryDate = new Date(c, parseInt(b) - 1, parseInt(a));
-              }
-            }
-          }
-        }
-        
-        if (!expiryDate || isNaN(expiryDate.getTime())) {
-          console.log(`⚠️ Invalid expiry date for voucher ${voucher._id}: ${expiry}`);
-          return true; // Can't parse, include it
-        }
-        
-        // Set expiry date to 12 PM (noon) on that day
-        expiryDate.setHours(12, 0, 0, 0);
-        
-        // Only include if expiry date + 12 PM has passed
-        const shouldInclude = expiryDate <= now;
-        
-        if (!shouldInclude) {
-          console.log(`🕐 Skipping voucher - not expired yet: ${expiry} (expires at 12 PM, now: ${now.toISOString()})`);
-        }
-        
-        return shouldInclude;
-      } catch (error) {
-        console.error(`Error parsing expiry date for voucher ${voucher._id}:`, error);
-        return true; // Error parsing, include it
-      }
-    });
-    
-    const userIdsWithUnpaidMonths = [...new Set(vouchersWithUnpaidMonths.map(v => v.userId))];
-    const filteredOut = allVouchersWithUnpaidMonths.length - vouchersWithUnpaidMonths.length;
-    console.log(`📊 Unpaid vouchers: ${allVouchersWithUnpaidMonths.length} total, ${vouchersWithUnpaidMonths.length} after expiry filter`);
-    console.log(`   🕐 Filtered out ${filteredOut} vouchers (expiry date not reached - before 12 PM on expiry date)`);
-    
-    // If no users have unpaid months, return empty result
-    if (userIdsWithUnpaidMonths.length === 0) {
-      console.log(`ℹ️ No users with unpaid months found`);
-      return res.status(200).json({ success: true, data: [], totalCount: 0, page, limit });
-    }
-    
-    // Base query - active users only, with unpaid months in their vouchers
+    // Base query - active users with unpaid or partial status
     let query = {
       $and: [
         {
@@ -3250,12 +3174,10 @@ app.get('/api/users/unpaid', async (req, res) => {
             { serviceStatus: { $exists: false } }
           ]
         },
-        // Include users who have unpaid months in vouchers
-        { _id: { $in: userIdsWithUnpaidMonths.map(id => new ObjectId(id)) } }
+        // Include users with unpaid or partial status
+        { status: { $in: ['unpaid', 'partial'] } }
       ]
     };
-    
-    console.log(`📊 Unpaid query: Fetching ${userIdsWithUnpaidMonths.length} users with unpaid voucher months`);
     
     // STRICT: Filter by fee collector if provided (case-insensitive) - ALWAYS apply
     if (feeCollector) {
@@ -3436,7 +3358,7 @@ app.get('/api/users/unpaid', async (req, res) => {
       .limit(limit)
       .toArray();
     
-    // No need for final filter - we already filtered by vouchers with unpaid months
+    // Users are already filtered by status='unpaid'/'partial' in the query
     const finalFilteredUsers = users;
     
     console.log(`Unpaid users: ${finalFilteredUsers.length} found, ${totalCount} total`);
