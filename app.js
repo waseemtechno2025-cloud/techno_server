@@ -1676,7 +1676,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
     };
     
     // Use userIds calculated from vouchers (receivedBy filter already applied)
-    // CRITICAL: Also filter by expiry date - only count users whose expiry has passed (after 12 PM)
+    // Count all users with status='paid' or 'partial', regardless of expiry date
     let paidUsers = 0;
     if (paidUserIds.length > 0) {
       paidUsersQuery._id = { $in: paidUserIds };
@@ -1686,49 +1686,10 @@ app.get('/api/dashboard/stats', async (req, res) => {
         paidUsersQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
       }
       
-      // Get all users matching the basic query
-      const allPaidUsers = await usersCollection.find(paidUsersQuery).toArray();
-      
-      // Filter by expiry date - only count if expiry has passed (after 12 PM on expiry date)
-      const now = new Date();
-      const paidUsersWithExpiredDate = allPaidUsers.filter(user => {
-        if (!user.expiryDate) return true; // No expiry date, include it
-        
-        try {
-          let expiryDate;
-          const expiry = user.expiryDate;
-          
-          if (expiry instanceof Date) {
-            expiryDate = new Date(expiry);
-          } else if (typeof expiry === 'string') {
-            // Try different formats
-            if (/^\d{4}-\d{2}-\d{2}/.test(expiry)) {
-              expiryDate = new Date(expiry);
-            } else {
-              const parts = expiry.split(/[-\/]/);
-              if (parts.length >= 3) {
-                const [a, b, c] = parts;
-                if (a.length === 4) {
-                  expiryDate = new Date(a, parseInt(b) - 1, parseInt(c));
-                } else {
-                  expiryDate = new Date(c, parseInt(b) - 1, parseInt(a));
-                }
-              }
-            }
-          }
-          
-          if (!expiryDate || isNaN(expiryDate.getTime())) return true;
-          
-          // Set to 12 PM on expiry date
-          expiryDate.setHours(12, 0, 0, 0);
-          return expiryDate <= now; // Only count if expiry passed
-        } catch (error) {
-          return true; // Error, include it
-        }
-      });
-      
-      paidUsers = paidUsersWithExpiredDate.length;
-      console.log(`✅ Paid users count: ${paidUsers} (from ${paidUserIds.length} userIds, ${allPaidUsers.length} before expiry filter)`);
+      // Count all paid users (no expiry date filter)
+      // This ensures dashboard stats match paid-users page
+      paidUsers = await usersCollection.countDocuments(paidUsersQuery);
+      console.log(`✅ Paid users count: ${paidUsers} (from ${paidUserIds.length} userIds with paid status)`);
     } else {
       // CRITICAL: If no userIds found (no payments to this fee collector), return 0
       // Don't query all users, as that would count users paid to OTHER fee collectors
@@ -1736,7 +1697,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
       paidUsers = 0;
     }
     
-    console.log(`📊 FINAL - Paid users for ${feeCollector || assignTo || 'all'}: ${paidUsers} (filtered by expiry date)`);
+    console.log(`📊 FINAL - Paid users for ${feeCollector || assignTo || 'all'}: ${paidUsers}`);
     
     // Count unpaid users (users with at least one unpaid month) - exclude inactive
     // CRITICAL: For fee collector, use EXACT same logic as /api/users/unpaid endpoint
