@@ -3358,10 +3358,59 @@ app.get('/api/users/unpaid', async (req, res) => {
       .limit(limit)
       .toArray();
     
-    // Users are already filtered by status='unpaid'/'partial' in the query
-    const finalFilteredUsers = users;
+    // CRITICAL: Enrich users with voucher data (outstandingMonths, pendingMonths, etc.)
+    // Frontend needs this to calculate and display outstanding amounts
+    const userIds = users.map(u => u._id.toString());
+    const userVouchers = await vouchersCollection.find({
+      userId: { $in: userIds }
+    }).toArray();
     
-    console.log(`Unpaid users: ${finalFilteredUsers.length} found, ${totalCount} total`);
+    // Create a map of userId -> voucher data
+    const voucherMap = new Map();
+    userVouchers.forEach(voucher => {
+      const userId = voucher.userId.toString();
+      voucherMap.set(userId, voucher);
+    });
+    
+    // Enrich each user with voucher data
+    const enrichedUsers = users.map(user => {
+      const voucher = voucherMap.get(user._id.toString());
+      if (voucher && Array.isArray(voucher.months)) {
+        // Extract unpaid months (outstandingMonths)
+        const outstandingMonths = voucher.months
+          .filter(m => m.status === 'unpaid' && !m.refundDate && !m.refundedAmount)
+          .map(m => m.month || m.name);
+        
+        // Extract pending months
+        const pendingMonths = voucher.months
+          .filter(m => m.status === 'pending' && !m.refundDate && !m.refundedAmount)
+          .map(m => m.month || m.name);
+        
+        // Extract partial months (for balance calculation)
+        const partialMonths = voucher.months
+          .filter(m => m.status === 'partial' && !m.refundDate && !m.refundedAmount)
+          .map(m => ({
+            month: m.month || m.name,
+            remainingAmount: m.remainingAmount || 0
+          }));
+        
+        return {
+          ...user,
+          outstandingMonths: outstandingMonths.length > 0 ? outstandingMonths : undefined,
+          pendingMonths: pendingMonths.length > 0 ? pendingMonths : undefined,
+          partialMonths: partialMonths.length > 0 ? partialMonths : undefined
+        };
+      }
+      
+      // For users without vouchers (e.g., new Pay Later users)
+      // Frontend will use their amount field to display outstanding
+      console.log(`⚠️ No voucher found for user ${user.userName} (${user._id}), using amount field for outstanding`);
+      return user;
+    });
+    
+    const finalFilteredUsers = enrichedUsers;
+    
+    console.log(`Unpaid users: ${finalFilteredUsers.length} found, ${totalCount} total (enriched with voucher data)`);
     if (feeCollector || assignTo) {
       console.log(`🔒 Filtered users - feeCollector: ${feeCollector || 'none'}, assignTo: ${assignTo || 'none'}`);
       finalFilteredUsers.forEach(u => {
