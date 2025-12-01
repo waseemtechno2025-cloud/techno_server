@@ -2217,42 +2217,14 @@ app.get('/api/dashboard/stats', async (req, res) => {
     
     const allUnpaidUsersList = await usersCollection.find(unpaidUsersListQuery).toArray();
     
-    // Filter by expiry date - only include users whose expiry has passed (after 12 PM)
-    const now = new Date();
+    // Filter to exclude expiring soon users only (not by expiry date)
+    // This ensures Pay Later users with future expiry are included in outstanding
     const unpaidUsersList = allUnpaidUsersList.filter(user => {
-      if (!user.expiryDate) return true; // No expiry date, include it
-      
-      try {
-        let expiryDate;
-        const expiry = user.expiryDate;
-        
-        if (expiry instanceof Date) {
-          expiryDate = new Date(expiry);
-        } else if (typeof expiry === 'string') {
-          if (/^\d{4}-\d{2}-\d{2}/.test(expiry)) {
-            expiryDate = new Date(expiry);
-          } else {
-            const parts = expiry.split(/[-\/]/);
-            if (parts.length >= 3) {
-              const [a, b, c] = parts;
-              if (a.length === 4) {
-                expiryDate = new Date(a, parseInt(b) - 1, parseInt(c));
-              } else {
-                expiryDate = new Date(c, parseInt(b) - 1, parseInt(a));
-              }
-            }
-          }
-        }
-        
-        if (!expiryDate || isNaN(expiryDate.getTime())) return true;
-        
-        // Set to 12 PM on expiry date
-        expiryDate.setHours(12, 0, 0, 0);
-        return expiryDate <= now; // Only include if expiry passed
-      } catch (error) {
-        return true; // Error, include it
-      }
+      // Exclude only expiring soon users
+      return !user.showInExpiringSoon;
     });
+    
+    console.log(`📊 Outstanding - Unpaid users: ${allUnpaidUsersList.length} total, ${unpaidUsersList.length} after excluding expiring soon`);
     
     let partialUsersQuery = {
       status: 'partial',
@@ -2271,40 +2243,13 @@ app.get('/api/dashboard/stats', async (req, res) => {
     
     const allPartialUsers = await usersCollection.find(partialUsersQuery).toArray();
     
-    // Filter partial users by expiry date too
+    // Filter to exclude expiring soon users only (not by expiry date)
     const partialUsers = allPartialUsers.filter(user => {
-      if (!user.expiryDate) return true;
-      
-      try {
-        let expiryDate;
-        const expiry = user.expiryDate;
-        
-        if (expiry instanceof Date) {
-          expiryDate = new Date(expiry);
-        } else if (typeof expiry === 'string') {
-          if (/^\d{4}-\d{2}-\d{2}/.test(expiry)) {
-            expiryDate = new Date(expiry);
-          } else {
-            const parts = expiry.split(/[-\/]/);
-            if (parts.length >= 3) {
-              const [a, b, c] = parts;
-              if (a.length === 4) {
-                expiryDate = new Date(a, parseInt(b) - 1, parseInt(c));
-              } else {
-                expiryDate = new Date(c, parseInt(b) - 1, parseInt(a));
-              }
-            }
-          }
-        }
-        
-        if (!expiryDate || isNaN(expiryDate.getTime())) return true;
-        
-        expiryDate.setHours(12, 0, 0, 0);
-        return expiryDate <= now;
-      } catch (error) {
-        return true;
-      }
+      // Exclude only expiring soon users
+      return !user.showInExpiringSoon;
     });
+    
+    console.log(`📊 Outstanding - Partial users: ${allPartialUsers.length} total, ${partialUsers.length} after excluding expiring soon`);
     
     // Calculate outstanding using voucher-based totals (same as unpaid-users.tsx)
     const calculateUserOutstanding = (user) => {
@@ -2317,20 +2262,33 @@ app.get('/api/dashboard/stats', async (req, res) => {
           return rem > 0 ? sum + rem : sum;
         }, 0);
       }
-      return 0; // No voucher found
+      
+      // For users without vouchers (e.g., new Pay Later users)
+      // Use their package amount as outstanding
+      if (user.status === 'unpaid' && user.amount) {
+        return Number(user.amount || 0);
+      }
+      
+      // For partial users without vouchers, use remainingAmount
+      if (user.status === 'partial' && user.remainingAmount) {
+        return Number(user.remainingAmount || 0);
+      }
+      
+      return 0;
     };
     
     const unpaidTotal = unpaidUsersList.reduce((sum, user) => sum + calculateUserOutstanding(user), 0);
     const partialTotal = partialUsers.reduce((sum, user) => sum + calculateUserOutstanding(user), 0);
     
-    console.log('📊 Dashboard Outstanding Calculation (filtered by expiry date):', {
+    console.log('📊 Dashboard Outstanding Calculation (excluding expiring soon):', {
       allUnpaidUsers: allUnpaidUsersList.length,
-      unpaidUsersAfterExpiryFilter: unpaidUsersList.length,
+      unpaidUsersAfterFilter: unpaidUsersList.length,
       allPartialUsers: allPartialUsers.length,
-      partialUsersAfterExpiryFilter: partialUsers.length,
+      partialUsersAfterFilter: partialUsers.length,
       unpaidTotal,
       partialTotal,
-      totalOutstanding: unpaidTotal + partialTotal
+      totalOutstanding: unpaidTotal + partialTotal,
+      note: 'Includes Pay Later users with future expiry dates'
     });
     
     const outstanding = Number(unpaidTotal) + Number(partialTotal); // Total from voucher-based calculation
