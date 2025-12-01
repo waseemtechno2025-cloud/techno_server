@@ -1841,16 +1841,22 @@ app.get('/api/dashboard/stats', async (req, res) => {
     });
     
     // Build unpaid users query with filter
+    // CRITICAL: Count ALL users with status='unpaid' or 'partial', regardless of expiry date
+    // This includes Pay Later users created today with future expiry dates
     let unpaidUsersQuery = {
+      status: { $in: ['unpaid', 'partial'] },
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
       ]
     };
-    if (unpaidUserIds.length > 0) {
-      unpaidUsersQuery._id = { $in: unpaidUserIds };
+    
+    // Apply fee collector filter if provided
+    if (feeCollector) {
+      unpaidUsersQuery.feeCollector = { $regex: new RegExp(`^${feeCollector.trim()}$`, 'i') };
     }
-    // Removed feeCollector filter here to avoid double filtering, as it's handled by pre-filtering
+    
+    // Apply technician filter if provided
     if (assignTo) {
       unpaidUsersQuery.assignTo = { $regex: new RegExp(`^${assignTo.trim()}$`, 'i') };
     }
@@ -1863,25 +1869,17 @@ app.get('/api/dashboard/stats', async (req, res) => {
       ]}
     ];
     
-    // CRITICAL: Use voucher-based unpaid count (includes expiry filter)
-    // This ensures users only show as unpaid AFTER their expiry date passes (12 PM)
-    // 
+    // Count all unpaid/partial users (including Pay Later with future expiry)
     // Example scenarios:
-    //   - User created today with expiry tomorrow → unpaidUsers = 0 (expiry not passed) ✓
-    //   - User expired yesterday → unpaidUsers = 1 (expiry passed) ✓
-    //   - Pay Later user created today → unpaidUsers = 0 (not expired yet) ✓
-    //
-    // This prevents newly created Pay Later users from showing in unpaid count immediately
-    const unpaidUsers = unpaidUserIds.length > 0 ? await usersCollection.countDocuments(unpaidUsersQuery) : 0;
+    //   - Pay Later user created 1 Dec with expiry 1 Jan → unpaidUsers = 1 ✓
+    //   - User expired yesterday → unpaidUsers = 1 ✓
+    //   - User expiring tomorrow → unpaidUsers = 0 (in expiring soon) ✓
+    const unpaidUsers = await usersCollection.countDocuments(unpaidUsersQuery);
     
     console.log(`📊 Dashboard Stats - Unpaid users calculation:`);
     console.log(`   - totalUsers: ${totalUsers}, paidUsers: ${paidUsers}, unpaidUsers: ${unpaidUsers}`);
-    console.log(`   - Unpaid users filtered by expiry date (only those past 12 PM on expiry date)`);
-    console.log(`   - initialVouchers: ${await vouchersCol.countDocuments({})}`);
-    console.log(`   - vouchersAfterAssignToFilter: ${assignTo ? vouchersForStats.length : 'N/A'}`);
-    console.log(`   - vouchersAfterFeeCollectorPreFilter: ${feeCollector ? (unpaidUsersFilteredByIds ? vouchersForUnpaidStats.length : 'N/A') : 'N/A'}`);
-    console.log(`   - userIdsWithUnpaidMonthsSize: ${userIdsWithUnpaidMonths.size}`);
-    console.log(`   - finalUnpaidUserIdsLength: ${finalUnpaidUserIds.length}`);
+    console.log(`   - Unpaid users counted by status='unpaid'/'partial' (including future expiry dates)`);
+    console.log(`   - Excludes only expiring soon users (showInExpiringSoon=true)`);
     
     // Expiring soon (TOMORROW) - include ALL users expiring tomorrow
     // CRITICAL: This is a REMINDER list, not a payment status list
