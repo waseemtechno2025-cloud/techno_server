@@ -5123,6 +5123,17 @@ const checkTomorrowExpiringUsers = async () => {
     const todayY = nowInPKT.getUTCFullYear();
     const todayM = nowInPKT.getUTCMonth();
     const todayD = nowInPKT.getUTCDate();
+    const currentHour = nowInPKT.getUTCHours();
+    
+    // CRITICAL: Only process if current time is at or after 12 PM (noon)
+    // This prevents premature marking at midnight (12 AM)
+    if (currentHour < 12) {
+      console.log(`⏰ Current time is ${currentHour}:00 (before 12 PM) - Skipping expiring soon check`);
+      console.log(`   Expiring soon check should only run at or after 12 PM (noon)`);
+      return;
+    }
+    
+    console.log(`✅ Current time is ${currentHour}:00 (at or after 12 PM) - Proceeding with expiring soon check`);
     
     // Calculate tomorrow's date in PKT
     const tomorrowDate = new Date(Date.UTC(todayY, todayM, todayD + 1));
@@ -5268,6 +5279,17 @@ const moveTodayExpiredToUnpaid = async () => {
     const todayY = nowInPKT.getUTCFullYear();
     const todayM = nowInPKT.getUTCMonth();
     const todayD = nowInPKT.getUTCDate();
+    const currentHour = nowInPKT.getUTCHours();
+    
+    // CRITICAL: Only process if current time is at or after 12 PM (noon)
+    // This prevents premature processing at midnight (12 AM)
+    if (currentHour < 12) {
+      console.log(`⏰ Current time is ${currentHour}:00 (before 12 PM) - Skipping expiry processing`);
+      console.log(`   Expiry processing should only run at or after 12 PM (noon)`);
+      return;
+    }
+    
+    console.log(`✅ Current time is ${currentHour}:00 (at or after 12 PM) - Proceeding with expiry processing`);
 
     const usersAll = await usersCollection.find({
       status: { $in: ['paid', 'partial', 'unpaid', 'pending', 'superbalance'] },
