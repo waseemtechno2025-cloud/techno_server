@@ -2490,6 +2490,16 @@ app.get('/api/users/paid', async (req, res) => {
         // Include both 'paid' and 'partial' months (users with payments show in Paid tab)
         const vouchers = await vouchersCollection.find({ 'months.status': { $in: ['paid', 'partial'] } }).toArray();
         const feeCollectorTrimmed = feeCollector ? feeCollector.trim() : null;
+        
+        // FALLBACK: Get users assigned to this feeCollector for old payments
+        let usersAssignedToFeeCollector = new Set();
+        if (feeCollectorTrimmed) {
+          const assignedUsers = await usersCollection.find({
+            feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+          }).toArray();
+          assignedUsers.forEach(u => usersAssignedToFeeCollector.add(u._id.toString()));
+          console.log(`📋 [Date Range] Found ${usersAssignedToFeeCollector.size} users assigned to ${feeCollectorTrimmed}`);
+        }
 
         const filteredVouchers = vouchers.filter((voucher) => {
           const months = Array.isArray(voucher.months) ? voucher.months : [];
@@ -2516,6 +2526,17 @@ app.get('/api/users/paid', async (req, res) => {
               const historyMatchesReceivedBy = paymentHistoryReceivedBy.some((rb) => 
                 new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(rb)
               );
+              
+              // FALLBACK: For old payments where receivedBy is empty or "Myself" or "Admin"
+              // Check if this user is assigned to the feeCollector
+              const hasReceivedBy = monthReceivedBy && monthReceivedBy !== '';
+              const receivedByIsOldValue = monthReceivedBy === 'Myself' || monthReceivedBy === 'Admin';
+              
+              if (!hasReceivedBy || receivedByIsOldValue) {
+                // No receivedBy or old value - fall back to checking if user is assigned to feeCollector
+                const userIsAssigned = usersAssignedToFeeCollector.has(voucher.userId.toString());
+                return userIsAssigned;
+              }
               
               return monthMatchesReceivedBy || historyMatchesReceivedBy;
             } else {
@@ -2544,8 +2565,18 @@ app.get('/api/users/paid', async (req, res) => {
                     new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(rb)
                   );
                   
+                  // FALLBACK: For old payments where receivedBy is empty or has old values
+                  const hasReceivedBy = monthReceivedBy && monthReceivedBy !== '';
+                  const receivedByIsOldValue = monthReceivedBy === 'Myself' || monthReceivedBy === 'Admin';
+                  
                   if (monthMatchesReceivedBy || historyMatchesReceivedBy) {
                     totalCollectionAmount += (month.paidAmount || month.packageFee || 0);
+                  } else if (!hasReceivedBy || receivedByIsOldValue) {
+                    // Include payments from users assigned to this fee collector (fallback for old data)
+                    const userIsAssigned = usersAssignedToFeeCollector.has(voucher.userId.toString());
+                    if (userIsAssigned) {
+                      totalCollectionAmount += (month.paidAmount || month.packageFee || 0);
+                    }
                   }
                 } else {
                   totalCollectionAmount += (month.paidAmount || month.packageFee || 0);
