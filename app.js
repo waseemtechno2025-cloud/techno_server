@@ -3784,10 +3784,12 @@ app.get('/api/users/expiring-soon', async (req, res) => {
       
       filtered = mapped.filter(({ ymd }) => {
         if (!ymd) return false;
-        // Show users expiring TOMORROW
-        // This includes Pay Later users created today
+        // Show users expiring TODAY or TOMORROW (within next 2 days)
+        // TODAY: Users whose expiry is today (will be processed at 12 PM)
+        // TOMORROW: Users whose expiry is tomorrow (reminder for next day)
+        const isToday = (ymd.y === todayY && ymd.m === todayM && ymd.d === todayD);
         const isTomorrow = (ymd.y === tomorrowY && ymd.m === tomorrowM && ymd.d === tomorrowD);
-        return isTomorrow;
+        return isToday || isTomorrow;
       });
     }
     
