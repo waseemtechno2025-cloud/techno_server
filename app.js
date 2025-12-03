@@ -2505,7 +2505,7 @@ app.get('/api/users/paid', async (req, res) => {
             
             // Check receivedBy filter
             if (feeCollectorTrimmed) {
-              // STRICT: Fee collector filter - ONLY show payments where receivedBy matches feeCollector
+              // Fee collector filter - check if receivedBy matches feeCollector
               const monthReceivedBy = month.receivedBy || '';
               const paymentHistoryReceivedBy = Array.isArray(month.paymentHistory) 
                 ? month.paymentHistory.map((p) => p.receivedBy || '').filter(Boolean)
@@ -2533,7 +2533,6 @@ app.get('/api/users/paid', async (req, res) => {
               if (dateInRange) {
                 // Check feeCollector filter if provided
                 if (feeCollectorTrimmed) {
-                  // STRICT: Only count payments where receivedBy matches feeCollector
                   const monthReceivedBy = month.receivedBy || '';
                   const paymentHistoryReceivedBy = Array.isArray(month.paymentHistory) 
                     ? month.paymentHistory.map((p) => p.receivedBy || '').filter(Boolean)
@@ -2698,6 +2697,16 @@ app.get('/api/users/paid', async (req, res) => {
       const userIdsWithPaidMonths = new Set();
       const feeCollectorTrimmed = feeCollector ? feeCollector.trim() : null;
       
+      // FALLBACK: Get users assigned to this feeCollector for old payments
+      let usersAssignedToFeeCollector = new Set();
+      if (feeCollectorTrimmed) {
+        const assignedUsers = await usersCollection.find({
+          feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+        }).toArray();
+        assignedUsers.forEach(u => usersAssignedToFeeCollector.add(u._id.toString()));
+        console.log(`📋 Found ${usersAssignedToFeeCollector.size} users assigned to ${feeCollectorTrimmed}`);
+      }
+      
       allVouchers.forEach(voucher => {
         if (Array.isArray(voucher.months)) {
           // Check if voucher has paid or partial months (users who made payments)
@@ -2709,7 +2718,7 @@ app.get('/api/users/paid', async (req, res) => {
             
             // Check receivedBy filter
             if (feeCollectorTrimmed) {
-              // STRICT: Fee collector filter - ONLY show payments where receivedBy matches feeCollector
+              // Fee collector filter - check if receivedBy matches feeCollector
               const monthReceivedBy = m.receivedBy || '';
               const paymentHistoryReceivedBy = Array.isArray(m.paymentHistory) 
                 ? m.paymentHistory.map((p) => p.receivedBy || '').filter(Boolean)
@@ -2721,6 +2730,36 @@ app.get('/api/users/paid', async (req, res) => {
               const historyMatches = paymentHistoryReceivedBy.some((rb) => 
                 new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(rb)
               );
+              
+              // FALLBACK: For old payments where receivedBy is empty or "Myself" or "Admin"
+              // Check if this user is assigned to the feeCollector
+              // This ensures old data still works while new payments use receivedBy
+              const hasReceivedBy = monthReceivedBy && monthReceivedBy !== '';
+              const receivedByIsOldValue = monthReceivedBy === 'Myself' || monthReceivedBy === 'Admin';
+              
+              if (!hasReceivedBy || receivedByIsOldValue) {
+                // No receivedBy or old value - fall back to checking if user is assigned to feeCollector
+                // This maintains backward compatibility with old payments
+                const userIsAssigned = usersAssignedToFeeCollector.has(voucher.userId.toString());
+                
+                if (userIdsWithPaidMonths.size < 3) {
+                  console.log(`\n🔍 Fallback check for user ${voucher.userId}:`);
+                  console.log(`   receivedBy: "${monthReceivedBy}" (${!hasReceivedBy ? 'empty' : 'old value'})`);
+                  console.log(`   User assigned to ${feeCollectorTrimmed}? ${userIsAssigned}`);
+                }
+                
+                return userIsAssigned;
+              }
+              
+              // Debug logging for first few vouchers
+              if (userIdsWithPaidMonths.size < 3) {
+                console.log(`\n🔍 Checking voucher for user ${voucher.userId}:`);
+                console.log(`   Month: ${m.month}, Status: ${m.status}, Paid: ${m.paidAmount}`);
+                console.log(`   month.receivedBy: "${monthReceivedBy}"`);
+                console.log(`   paymentHistory: ${paymentHistoryReceivedBy.length > 0 ? paymentHistoryReceivedBy.join(', ') : 'None'}`);
+                console.log(`   Looking for: "${feeCollectorTrimmed}"`);
+                console.log(`   monthMatches: ${monthMatches}, historyMatches: ${historyMatches}`);
+              }
               
               return monthMatches || historyMatches;
             } else {
@@ -2774,6 +2813,12 @@ app.get('/api/users/paid', async (req, res) => {
       console.log(`🔒 Filtering /api/users/paid by receivedBy: ${feeCollectorTrimmed} (for paid users list)`);
       console.log(`💰 Income calculation uses receivedBy (already filtered above)`);
       console.log(`📋 Users with payments received by ${feeCollectorTrimmed}: ${usersWithPaidMonths.length}`);
+
+      // STRICT: Also filter by feeCollector field on user document
+      // This ensures we only show users assigned to this fee collector
+      // User request: "shows me some users who are not assigned to me... I want it to show me all users who are assigned to me"
+      query.$and.push({ feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } });
+      console.log(`🔒 STRICT: Filtering /api/users/paid by feeCollector (assigned user): ${feeCollectorTrimmed}`);
     }
     
     // STRICT: Filter by assignTo (technician) if provided (case-insensitive) - ALWAYS apply
