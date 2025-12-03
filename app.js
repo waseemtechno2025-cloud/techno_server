@@ -1615,6 +1615,13 @@ app.get('/api/dashboard/stats', async (req, res) => {
 
           // If feeCollector filter is provided, check receivedBy
           if (feeCollectorTrimmedForStats) {
+            // CRITICAL: Check THREE conditions (ANY one should be true):
+            // 1. User is assigned to this fee collector (user.feeCollector field)
+            // 2. Payment was received by this fee collector (receivedBy field)
+            // 3. Payment history contains this fee collector
+
+            const userIsAssigned = usersAssignedToFeeCollector.has(voucher.userId.toString());
+
             // Check month-level receivedBy
             const monthReceivedBy = m.receivedBy || '';
             // Also check paymentHistory for receivedBy
@@ -1629,18 +1636,8 @@ app.get('/api/dashboard/stats', async (req, res) => {
               new RegExp(`^${feeCollectorTrimmedForStats.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(rb)
             );
 
-            // FALLBACK: For old payments where receivedBy is empty or "Myself" or "Admin"
-            // Check if this user is assigned to the feeCollector
-            const hasReceivedBy = monthReceivedBy && monthReceivedBy !== '';
-            const receivedByIsOldValue = monthReceivedBy === 'Myself' || monthReceivedBy === 'Admin';
-
-            if (!hasReceivedBy || receivedByIsOldValue) {
-              // No receivedBy or old value - fall back to checking if user is assigned to feeCollector
-              const userIsAssigned = usersAssignedToFeeCollector.has(voucher.userId.toString());
-              return userIsAssigned;
-            }
-
-            return monthMatches || historyMatches;
+            // ✅ FIXED: Include user if ANY condition is true
+            return userIsAssigned || monthMatches || historyMatches;
           }
 
           return true; // No feeCollector filter, include all paid months
