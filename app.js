@@ -2813,12 +2813,6 @@ app.get('/api/users/paid', async (req, res) => {
       console.log(`🔒 Filtering /api/users/paid by receivedBy: ${feeCollectorTrimmed} (for paid users list)`);
       console.log(`💰 Income calculation uses receivedBy (already filtered above)`);
       console.log(`📋 Users with payments received by ${feeCollectorTrimmed}: ${usersWithPaidMonths.length}`);
-
-      // STRICT: Also filter by feeCollector field on user document
-      // This ensures we only show users assigned to this fee collector
-      // User request: "shows me some users who are not assigned to me... I want it to show me all users who are assigned to me"
-      query.$and.push({ feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } });
-      console.log(`🔒 STRICT: Filtering /api/users/paid by feeCollector (assigned user): ${feeCollectorTrimmed}`);
     }
     
     // STRICT: Filter by assignTo (technician) if provided (case-insensitive) - ALWAYS apply
