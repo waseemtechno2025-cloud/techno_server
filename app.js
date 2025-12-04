@@ -3119,8 +3119,9 @@ app.get('/api/users/unpaid', async (req, res) => {
             { serviceStatus: { $exists: false } }
           ]
         },
-        // Include users with unpaid or partial status
-        { status: { $in: ['unpaid', 'partial'] } }
+        // ✅ FIXED: Include ONLY unpaid users (exclude partial/balance users)
+        // Partial users should ONLY appear in Balance tab, NOT in Unpaid tab
+        { status: 'unpaid' }
       ]
     };
 
