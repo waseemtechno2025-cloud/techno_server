@@ -8184,6 +8184,135 @@ app.get('/api/incomes/:name', ensureDbConnection, async (req, res) => {
   }
 });
 
+// GET Admin Overall Income Report (with date range filter)
+// This calculates:
+// 1. Total transferred from fee collectors to Admin (from collections)
+// 2. Admin's direct bank income (receivedBy=Admin, paymentMethod=Bank)
+// 3. Admin's direct cash income (receivedBy=Admin, paymentMethod=Cash)
+app.get('/api/incomes/admin/report', ensureDbConnection, async (req, res) => {
+  try {
+    const { fromDate, toDate } = req.query;
+
+    if (!fromDate || !toDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'fromDate and toDate are required (format: YYYY-MM-DD)'
+      });
+    }
+
+    console.log(`📊 Admin Income Report: ${fromDate} to ${toDate}`);
+
+    // Parse dates - set time to start/end of day in PKT
+    const startDate = new Date(fromDate + 'T00:00:00+05:00');
+    const endDate = new Date(toDate + 'T23:59:59+05:00');
+
+    console.log(`📅 Date range: ${startDate.toISOString()} to ${endDate.toISOString()}`);
+
+    // 1. Get transferred amount from fee collectors (from collections)
+    const collectionsCollection = db.collection('collections');
+    const transfers = await collectionsCollection.find({
+      date: {
+        $gte: startDate,
+        $lte: endDate
+      }
+    }).toArray();
+
+    let transferredFromEmployees = 0;
+    const transferDetails = [];
+
+    transfers.forEach(transfer => {
+      const amount = Number(transfer.amount || 0);
+      transferredFromEmployees += amount;
+      transferDetails.push({
+        feeCollector: transfer.feeCollector,
+        amount: amount,
+        date: transfer.date,
+        message: transfer.message || ''
+      });
+    });
+
+    console.log(`💰 Transferred from employees: Rs ${transferredFromEmployees} (${transfers.length} transfers)`);
+
+    // 2. Get direct Admin income from vouchers (receivedBy = Admin or Myself)
+    const vouchersCollection = db.collection('vouchers');
+    const allVouchers = await vouchersCollection.find({}).toArray();
+
+    let adminCashIncome = 0;
+    let adminBankIncome = 0;
+    const paymentDetails = [];
+
+    allVouchers.forEach(voucher => {
+      if (voucher.months && Array.isArray(voucher.months)) {
+        voucher.months.forEach(month => {
+          const paymentHistory = Array.isArray(month.paymentHistory) ? month.paymentHistory : [];
+
+          paymentHistory.forEach(payment => {
+            const paymentReceivedBy = (payment.receivedBy || '').trim();
+            const paymentMethod = (payment.paymentMethod || '').trim().toLowerCase();
+            const paymentAmount = Number(payment.amount || 0);
+            const paymentDate = payment.date ? new Date(payment.date) : null;
+
+            // Check if payment is by Admin or Myself
+            const isAdminPayment = /^admin$/i.test(paymentReceivedBy) || /^myself$/i.test(paymentReceivedBy);
+
+            // Check if payment is within date range
+            const isWithinDateRange = paymentDate && paymentDate >= startDate && paymentDate <= endDate;
+
+            if (isAdminPayment && isWithinDateRange && paymentAmount > 0) {
+              if (paymentMethod === 'cash') {
+                adminCashIncome += paymentAmount;
+              } else if (paymentMethod === 'bank' || paymentMethod === 'bank transfer') {
+                adminBankIncome += paymentAmount;
+              } else {
+                // Default to cash if payment method not specified
+                adminCashIncome += paymentAmount;
+              }
+
+              paymentDetails.push({
+                userName: voucher.userName || 'Unknown',
+                amount: paymentAmount,
+                method: paymentMethod || 'cash',
+                date: paymentDate,
+                month: month.month
+              });
+            }
+          });
+        });
+      }
+    });
+
+    console.log(`💵 Admin direct cash income: Rs ${adminCashIncome}`);
+    console.log(`🏦 Admin direct bank income: Rs ${adminBankIncome}`);
+
+    // Calculate totals
+    const totalIncome = transferredFromEmployees + adminCashIncome + adminBankIncome;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        dateRange: {
+          from: fromDate,
+          to: toDate
+        },
+        transferredFromEmployees: transferredFromEmployees,
+        adminCashIncome: adminCashIncome,
+        adminBankIncome: adminBankIncome,
+        totalIncome: totalIncome,
+        transferCount: transfers.length,
+        transferDetails: transferDetails,
+        paymentDetails: paymentDetails
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching admin income report:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching admin income report',
+      error: error.message
+    });
+  }
+});
+
 // POST - Add income when payment is received
 app.post('/api/incomes', ensureDbConnection, async (req, res) => {
   try {
