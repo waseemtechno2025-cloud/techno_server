@@ -1840,10 +1840,10 @@ app.get('/api/dashboard/stats', async (req, res) => {
     });
 
     // Build unpaid users query with filter
-    // CRITICAL: Count ALL users with status='unpaid' or 'partial', regardless of expiry date
-    // This includes Pay Later users created today with future expiry dates
+    // CRITICAL: Count ONLY users with status='unpaid' (NOT 'partial')
+    // Partial/balance users should NOT be counted here - they show in Balance tab only
     let unpaidUsersQuery = {
-      status: { $in: ['unpaid', 'partial'] },
+      status: 'unpaid', // Only unpaid, NOT partial (balance users show separately)
       $or: [
         { serviceStatus: { $ne: 'inactive' } },
         { serviceStatus: { $exists: false } }
@@ -1870,17 +1870,19 @@ app.get('/api/dashboard/stats', async (req, res) => {
       }
     ];
 
-    // Count all unpaid/partial users (including Pay Later with future expiry)
+    // Count only unpaid users (excluding partial/balance users)
     // Example scenarios:
     //   - Pay Later user created 1 Dec with expiry 1 Jan → unpaidUsers = 1 ✓
     //   - User expired yesterday → unpaidUsers = 1 ✓
     //   - User expiring tomorrow → unpaidUsers = 0 (in expiring soon) ✓
+    //   - Balance user (partial payment) → unpaidUsers = 0 (in Balance tab) ✓
     const unpaidUsers = await usersCollection.countDocuments(unpaidUsersQuery);
 
     console.log(`📊 Dashboard Stats - Unpaid users calculation:`);
     console.log(`   - totalUsers: ${totalUsers}, paidUsers: ${paidUsers}, unpaidUsers: ${unpaidUsers}`);
-    console.log(`   - Unpaid users counted by status='unpaid'/'partial' (including future expiry dates)`);
-    console.log(`   - Excludes only expiring soon users (showInExpiringSoon=true)`);
+    console.log(`   - Unpaid users counted by status='unpaid' ONLY (balance/partial users excluded)`);
+    console.log(`   - Excludes expiring soon users (showInExpiringSoon=true)`);
+
 
     // Expiring soon (TOMORROW) - include ALL users expiring tomorrow
     // CRITICAL: This is a REMINDER list, not a payment status list
