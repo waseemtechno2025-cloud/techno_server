@@ -2410,6 +2410,7 @@ app.get('/api/users/paid', async (req, res) => {
     const toDate = req.query.toDate; // YYYY-MM-DD format
     const feeCollector = req.query.feeCollector; // Fee collector name filter
     const assignTo = req.query.assignTo; // Technician assignment filter
+    const search = req.query.search; // Search query for userName, userId, simNo, etc.
 
     let userIds = [];
     let totalCollectionAmount = 0; // Track total collection for date range
@@ -2811,6 +2812,22 @@ app.get('/api/users/paid', async (req, res) => {
         query.$and.push({ assignTo: { $regex: new RegExp(`^${assignToTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } });
         console.log(`🔒 STRICT: Filtering /api/users/paid by assignTo (technician, case-insensitive): ${assignToTrimmed}`);
       }
+    }
+
+    // Search filter - search in userName, userId, simNo, whatsappNo, streetName
+    if (search && search.trim()) {
+      const searchTrimmed = search.trim();
+      const searchRegex = new RegExp(searchTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      query.$and.push({
+        $or: [
+          { userName: { $regex: searchRegex } },
+          { userId: { $regex: searchRegex } },
+          { simNo: { $regex: searchRegex } },
+          { whatsappNo: { $regex: searchRegex } },
+          { streetName: { $regex: searchRegex } }
+        ]
+      });
+      console.log(`🔍 Search filter applied: "${searchTrimmed}"`);
     }
 
     // Add user ID filter if we have users with paid months
