@@ -2946,13 +2946,10 @@ app.get('/api/collections/my-collection', async (req, res) => {
     const collectorTrimmed = collector.trim();
     const collectorRegex = new RegExp(`^${collectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
 
-    // For backward compatibility: Also match "Myself" if searching for admin
-    const isAdminSearch = /^admin$/i.test(collectorTrimmed);
-    const shouldMatchMyself = isAdminSearch;
-
-    if (shouldMatchMyself) {
-      console.log(`🔧 Backward compatibility enabled: Will also match "Myself" payments for admin`);
-    }
+    // STRICT: No backward compatibility for "Myself" - only match explicit receivedBy
+    // Admin should only see payments where receivedBy is explicitly "admin" or "Admin"
+    const shouldMatchMyself = false;
+    console.log(`🔒 STRICT mode: Only matching explicit receivedBy "${collectorTrimmed}"`);
 
     // Get all vouchers with paid/partial months
     const vouchers = await vouchersCollection.find({
@@ -3005,8 +3002,9 @@ app.get('/api/collections/my-collection', async (req, res) => {
 
         for (const payment of paymentHistory) {
           const histReceivedBy = payment.receivedBy || '';
-          const histMatchesCollector = collectorRegex.test(histReceivedBy) ||
-            (shouldMatchMyself && histReceivedBy.toLowerCase() === 'myself');
+          // STRICT: Only match explicit collector name, never "Myself"
+          const histMatchesCollector = collectorRegex.test(histReceivedBy) &&
+            histReceivedBy.toLowerCase() !== 'myself';
 
           if (histMatchesCollector && payment.date && payment.amount) {
             const dateStr = normalizeDate(payment.date);
@@ -3044,8 +3042,9 @@ app.get('/api/collections/my-collection', async (req, res) => {
         // This avoids duplicate entries for the same payment
         if (!addedFromHistory) {
           const monthReceivedBy = month.receivedBy || '';
-          const monthMatchesCollector = collectorRegex.test(monthReceivedBy) ||
-            (shouldMatchMyself && monthReceivedBy.toLowerCase() === 'myself');
+          // STRICT: Only match explicit collector name, never "Myself"
+          const monthMatchesCollector = collectorRegex.test(monthReceivedBy) &&
+            monthReceivedBy.toLowerCase() !== 'myself';
 
           if (monthMatchesCollector) {
             // Get payment date from month
