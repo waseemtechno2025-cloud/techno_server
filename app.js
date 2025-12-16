@@ -8039,9 +8039,15 @@ app.get('/api/collections/history/:feeCollector', ensureDbConnection, async (req
       // Handle multi-month vouchers
       if (voucher.months && Array.isArray(voucher.months)) {
         voucher.months.forEach(month => {
+          // ONLY include fully paid status - NO partial payments
           if (month.status === 'paid' && month.receivedBy) {
             const receivedByLower = month.receivedBy.toLowerCase().trim();
             const feeCollectorLower = feeCollectorName.toLowerCase().trim();
+
+            // STRICT: Exclude "Myself" - only show explicit fee collector matches
+            if (receivedByLower === 'myself') {
+              return; // Skip Myself payments
+            }
 
             if (receivedByLower === feeCollectorLower) {
               const paidAmount = Number(month.paidAmount || 0);
@@ -8085,6 +8091,11 @@ app.get('/api/collections/history/:feeCollector', ensureDbConnection, async (req
         voucher.paymentHistory.forEach(payment => {
           const receivedByLower = (payment.receivedBy || '').toLowerCase().trim();
           const feeCollectorLower = feeCollectorName.toLowerCase().trim();
+
+          // STRICT: Exclude "Myself" - only show explicit fee collector matches
+          if (receivedByLower === 'myself') {
+            return; // Skip Myself payments
+          }
 
           if (receivedByLower === feeCollectorLower) {
             const paidAmount = Number(payment.amount || 0);
