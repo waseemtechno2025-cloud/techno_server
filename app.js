@@ -7489,6 +7489,70 @@ app.put('/api/complaints/:id/reopen', ensureDbConnection, async (req, res) => {
   }
 });
 
+// ============ CRON JOB ENDPOINT ============
+// Reset all income at month end - To be called by cronjob.org
+app.post('/api/cron/reset-monthly-income', ensureDbConnection, async (req, res) => {
+  try {
+    console.log('🔄 ===== MONTHLY INCOME RESET CRON JOB STARTED =====');
+    console.log('📅 Triggered at:', new Date().toISOString());
+
+    const incomesCollection = db.collection('incomes');
+
+    // Get current state before reset
+    const allIncomes = await incomesCollection.find({}).toArray();
+    console.log(`📊 Found ${allIncomes.length} income records to reset`);
+
+    // Log current totals
+    let totalCashBeforeReset = 0;
+    let totalBankBeforeReset = 0;
+    allIncomes.forEach(income => {
+      totalCashBeforeReset += income.cashIncome || 0;
+      totalBankBeforeReset += income.bankIncome || 0;
+      console.log(`   👤 ${income.name}: Cash Rs ${income.cashIncome || 0}, Bank Rs ${income.bankIncome || 0}`);
+    });
+
+    console.log(`💰 Total Cash Income before reset: Rs ${totalCashBeforeReset}`);
+    console.log(`🏦 Total Bank Income before reset: Rs ${totalBankBeforeReset}`);
+
+    // Reset all cashIncome and bankIncome to 0
+    const result = await incomesCollection.updateMany(
+      {}, // Match all documents
+      {
+        $set: {
+          cashIncome: 0,
+          bankIncome: 0,
+          lastResetDate: new Date(),
+          lastResetMonth: new Date().getMonth() + 1,
+          lastResetYear: new Date().getFullYear()
+        }
+      }
+    );
+
+    console.log(`✅ Reset completed: ${result.modifiedCount} records updated`);
+    console.log('🔄 ===== MONTHLY INCOME RESET CRON JOB COMPLETED =====\n');
+
+    res.status(200).json({
+      success: true,
+      message: 'Monthly income reset completed successfully',
+      data: {
+        recordsReset: result.modifiedCount,
+        totalCashReset: totalCashBeforeReset,
+        totalBankReset: totalBankBeforeReset,
+        resetDate: new Date().toISOString(),
+        resetMonth: new Date().getMonth() + 1,
+        resetYear: new Date().getFullYear()
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error resetting monthly income:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error resetting monthly income',
+      error: error.message
+    });
+  }
+});
+
 // Start server (only in development, not in Vercel)
 if (!process.env.VERCEL) {
   const PORT = process.env.PORT || 5000;
