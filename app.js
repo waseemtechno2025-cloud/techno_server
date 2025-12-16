@@ -7491,11 +7491,44 @@ app.put('/api/complaints/:id/reopen', ensureDbConnection, async (req, res) => {
 
 // ============ CRON JOB ENDPOINT ============
 // Reset all income at month end - To be called by cronjob.org
+// This endpoint should be called daily, but will only reset on the last day of month
 app.post('/api/cron/reset-monthly-income', ensureDbConnection, async (req, res) => {
   try {
-    console.log('🔄 ===== MONTHLY INCOME RESET CRON JOB STARTED =====');
+    console.log('🔄 ===== MONTHLY INCOME RESET CRON JOB TRIGGERED =====');
     console.log('📅 Triggered at:', new Date().toISOString());
 
+    // Get current date in Pakistan timezone
+    const nowUTC = new Date();
+    const pktDate = new Date(nowUTC.getTime() + (PKT_OFFSET_MIN * 60000));
+    
+    const currentDay = pktDate.getDate();
+    const currentMonth = pktDate.getMonth();
+    const currentYear = pktDate.getFullYear();
+    
+    // Get the last day of current month
+    const lastDayOfMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+    
+    console.log(`📅 Current PKT Date: ${pktDate.toISOString().split('T')[0]}`);
+    console.log(`📅 Current Day: ${currentDay}, Last Day of Month: ${lastDayOfMonth}`);
+    
+    // Check if today is the last day of the month
+    if (currentDay !== lastDayOfMonth) {
+      console.log(`⏭️ Not the last day of month. Skipping reset. (Day ${currentDay}/${lastDayOfMonth})`);
+      console.log('🔄 ===== CRON JOB ENDED - NO ACTION TAKEN =====\n');
+      
+      return res.status(200).json({
+        success: true,
+        message: 'Not the last day of month - reset skipped',
+        data: {
+          currentDay: currentDay,
+          lastDayOfMonth: lastDayOfMonth,
+          currentDate: pktDate.toISOString().split('T')[0],
+          resetSkipped: true
+        }
+      });
+    }
+
+    console.log('✅ Last day of month confirmed - Proceeding with reset...');
     const incomesCollection = db.collection('incomes');
 
     // Get current state before reset
