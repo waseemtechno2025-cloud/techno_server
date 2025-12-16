@@ -8065,7 +8065,8 @@ app.get('/api/collections/history/:feeCollector', ensureDbConnection, async (req
         const receivedByLower = receivedBy.toLowerCase().trim();
         const feeCollectorLower = feeCollectorName.toLowerCase().trim();
 
-        // Match if receivedBy matches fee collector name
+        // STRICT: Only match if receivedBy explicitly matches fee collector name
+        // No fallback for "Myself" or empty receivedBy - must be explicit match
         if (receivedByLower === feeCollectorLower) {
           const paidAmount = Number(voucher.paidAmount || 0);
           if (paidAmount > 0) {
@@ -8075,23 +8076,6 @@ app.get('/api/collections/history/:feeCollector', ensureDbConnection, async (req
               date: voucher.paymentDate || voucher.paidDate || new Date(),
               paymentMethod: voucher.paymentMethod || 'Cash'
             });
-          }
-        }
-        // Fallback: Check if user is assigned to this fee collector
-        else if (!receivedBy || receivedBy === 'Myself' || receivedBy === 'Admin') {
-          const userFeeCollector = voucher.feeCollector || '';
-          const userFeeCollectorLower = userFeeCollector.toLowerCase().trim();
-
-          if (userFeeCollectorLower === feeCollectorLower) {
-            const paidAmount = Number(voucher.paidAmount || 0);
-            if (paidAmount > 0) {
-              collectionHistory.push({
-                userName: userName,
-                amount: paidAmount,
-                date: voucher.paymentDate || voucher.paidDate || new Date(),
-                paymentMethod: voucher.paymentMethod || 'Cash'
-              });
-            }
           }
         }
       }
