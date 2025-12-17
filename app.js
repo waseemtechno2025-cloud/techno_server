@@ -7489,6 +7489,83 @@ app.put('/api/complaints/:id/reopen', ensureDbConnection, async (req, res) => {
   }
 });
 
+// ============ OPTIMIZED COLLECTIONS ENDPOINT ============
+// GET all employee stats in a single call (optimized for collections page)
+app.get('/api/collections/all-employee-stats', ensureDbConnection, async (req, res) => {
+  try {
+    console.log('📊 Fetching all employee stats (optimized)');
+    
+    const employeesCollection = db.collection('employees');
+    const incomesCollection = db.collection('incomes');
+    const collectionsCollection = db.collection('collections');
+    
+    // Get all active employees (excluding admin)
+    const employees = await employeesCollection.find({
+      isActive: true,
+      role: { $not: { $regex: /^admin$/i } }
+    }).toArray();
+    
+    console.log(`👥 Found ${employees.length} active employees`);
+    
+    // Get all income records at once
+    const allIncomes = await incomesCollection.find({}).toArray();
+    const incomeMap = new Map();
+    allIncomes.forEach(income => {
+      incomeMap.set(income.name.toLowerCase().trim(), {
+        cashIncome: income.cashIncome || 0,
+        bankIncome: income.bankIncome || 0,
+        totalIncome: (income.cashIncome || 0) + (income.bankIncome || 0)
+      });
+    });
+    
+    // Get all transferred amounts at once
+    const allTransfers = await collectionsCollection.find({}).toArray();
+    const transferMap = new Map();
+    allTransfers.forEach(transfer => {
+      const fc = transfer.feeCollector?.toLowerCase().trim();
+      if (fc) {
+        transferMap.set(fc, (transferMap.get(fc) || 0) + (transfer.amount || 0));
+      }
+    });
+    
+    // Build stats for all employees
+    const employeeStats = employees.map(employee => {
+      const nameLower = employee.name.toLowerCase().trim();
+      const income = incomeMap.get(nameLower) || { cashIncome: 0, bankIncome: 0, totalIncome: 0 };
+      const transferred = transferMap.get(nameLower) || 0;
+      
+      return {
+        employee: {
+          _id: employee._id,
+          name: employee.name,
+          role: employee.role,
+          salary: employee.salary,
+          isActive: employee.isActive
+        },
+        totalCollection: income.totalIncome,
+        cashIncome: income.cashIncome,
+        bankIncome: income.bankIncome,
+        transferredAmount: transferred
+      };
+    });
+    
+    console.log(`✅ Returning stats for ${employeeStats.length} employees`);
+    
+    res.status(200).json({
+      success: true,
+      data: employeeStats,
+      count: employeeStats.length
+    });
+  } catch (error) {
+    console.error('❌ Error fetching all employee stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching employee stats',
+      error: error.message
+    });
+  }
+});
+
 // ============ CRON JOB ENDPOINT ============
 // Reset all income at month end - To be called by cronjob.org
 // This endpoint should be called daily, but will only reset on the last day of month
