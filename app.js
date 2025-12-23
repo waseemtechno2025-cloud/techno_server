@@ -7001,7 +7001,7 @@ app.post('/api/refunds/process-payment', ensureDbConnection, async (req, res) =>
 // POST convert paid/partial month to unpaid (clear payment history)
 app.post('/api/vouchers/convert-to-unpaid', ensureDbConnection, async (req, res) => {
   try {
-    const { userId, month } = req.body;
+    const { userId, month, newPackageFee, newDiscount } = req.body;
 
     if (!userId || !month) {
       return res.status(400).json({
@@ -7039,14 +7039,18 @@ app.post('/api/vouchers/convert-to-unpaid', ensureDbConnection, async (req, res)
     }
 
     const monthData = voucher.months[monthIndex];
-    const packageFee = Number(monthData.packageFee || 0);
-    const discount = Number(monthData.discount || 0);
+
+    // Use new values if provided, otherwise fallback to existing
+    const packageFee = newPackageFee !== undefined ? Number(newPackageFee) : Number(monthData.packageFee || 0);
+    const discount = newDiscount !== undefined ? Number(newDiscount) : Number(monthData.discount || 0);
+
     const fullAmount = packageFee - discount;
     const refundedAmount = Number(monthData.paidAmount || 0);
     const receivedBy = monthData.receivedBy || '';
     const paymentMethod = monthData.paymentMethod || 'Cash';
 
     console.log(`💰 Reversing payment - Amount: Rs ${refundedAmount}, ReceivedBy: ${receivedBy}, Method: ${paymentMethod}`);
+    if (newPackageFee !== undefined) console.log(`   📝 Updating package: Rs ${packageFee} (was ${monthData.packageFee})`);
 
     // CRITICAL: Deduct from receiver's income if amount was paid
     if (refundedAmount > 0 && receivedBy) {
@@ -7084,11 +7088,13 @@ app.post('/api/vouchers/convert-to-unpaid', ensureDbConnection, async (req, res)
       }
     }
 
-    // Update month: convert to unpaid, clear payment history
+    // Update month: convert to unpaid, clear payment history, update package fee/discount
     const updatedMonths = [...voucher.months];
     updatedMonths[monthIndex] = {
       ...monthData,
       status: 'unpaid',
+      packageFee: packageFee,
+      discount: discount,
       paidAmount: 0,
       remainingAmount: fullAmount,
       paymentMethod: '',
@@ -7104,7 +7110,7 @@ app.post('/api/vouchers/convert-to-unpaid', ensureDbConnection, async (req, res)
       { $set: { months: updatedMonths } }
     );
 
-    console.log(`✅ Updated month ${month} to unpaid status`);
+    console.log(`✅ Updated month ${month} to unpaid status with amount ${fullAmount}`);
 
     // Recalculate user totals
     const nonReversedMonths = updatedMonths.filter((m) => {
@@ -7494,19 +7500,19 @@ app.put('/api/complaints/:id/reopen', ensureDbConnection, async (req, res) => {
 app.get('/api/collections/all-employee-stats', ensureDbConnection, async (req, res) => {
   try {
     console.log('📊 Fetching all employee stats (optimized)');
-    
+
     const employeesCollection = db.collection('employees');
     const incomesCollection = db.collection('incomes');
     const collectionsCollection = db.collection('collections');
-    
+
     // Get all active employees (excluding admin)
     const employees = await employeesCollection.find({
       isActive: true,
       role: { $not: { $regex: /^admin$/i } }
     }).toArray();
-    
+
     console.log(`👥 Found ${employees.length} active employees`);
-    
+
     // Get all income records at once
     const allIncomes = await incomesCollection.find({}).toArray();
     const incomeMap = new Map();
@@ -7517,7 +7523,7 @@ app.get('/api/collections/all-employee-stats', ensureDbConnection, async (req, r
         totalIncome: (income.cashIncome || 0) + (income.bankIncome || 0)
       });
     });
-    
+
     // Get all transferred amounts at once
     const allTransfers = await collectionsCollection.find({}).toArray();
     const transferMap = new Map();
@@ -7527,13 +7533,13 @@ app.get('/api/collections/all-employee-stats', ensureDbConnection, async (req, r
         transferMap.set(fc, (transferMap.get(fc) || 0) + (transfer.amount || 0));
       }
     });
-    
+
     // Build stats for all employees
     const employeeStats = employees.map(employee => {
       const nameLower = employee.name.toLowerCase().trim();
       const income = incomeMap.get(nameLower) || { cashIncome: 0, bankIncome: 0, totalIncome: 0 };
       const transferred = transferMap.get(nameLower) || 0;
-      
+
       return {
         employee: {
           _id: employee._id,
@@ -7548,9 +7554,9 @@ app.get('/api/collections/all-employee-stats', ensureDbConnection, async (req, r
         transferredAmount: transferred
       };
     });
-    
+
     console.log(`✅ Returning stats for ${employeeStats.length} employees`);
-    
+
     res.status(200).json({
       success: true,
       data: employeeStats,
@@ -7577,22 +7583,22 @@ app.post('/api/cron/reset-monthly-income', ensureDbConnection, async (req, res) 
     // Get current date in Pakistan timezone
     const nowUTC = new Date();
     const pktDate = new Date(nowUTC.getTime() + (PKT_OFFSET_MIN * 60000));
-    
+
     const currentDay = pktDate.getDate();
     const currentMonth = pktDate.getMonth();
     const currentYear = pktDate.getFullYear();
-    
+
     // Get the last day of current month
     const lastDayOfMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
-    
+
     console.log(`📅 Current PKT Date: ${pktDate.toISOString().split('T')[0]}`);
     console.log(`📅 Current Day: ${currentDay}, Last Day of Month: ${lastDayOfMonth}`);
-    
+
     // Check if today is the last day of the month
     if (currentDay !== lastDayOfMonth) {
       console.log(`⏭️ Not the last day of month. Skipping reset. (Day ${currentDay}/${lastDayOfMonth})`);
       console.log('🔄 ===== CRON JOB ENDED - NO ACTION TAKEN =====\n');
-      
+
       return res.status(200).json({
         success: true,
         message: 'Not the last day of month - reset skipped',
