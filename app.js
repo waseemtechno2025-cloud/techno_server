@@ -3118,6 +3118,7 @@ app.get('/api/users/unpaid', async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const expiryDate = req.query.expiryDate; // YYYY-MM-DD format
     const unpaidDate = req.query.unpaidDate; // YYYY-MM-DD format - date user became unpaid
+    const rechargeDate = req.query.rechargeDate; // YYYY-MM-DD format - for filtering by recharge date
     const feeCollector = req.query.feeCollector; // Fee collector name filter
     const assignTo = req.query.assignTo; // Technician assignment filter
     const search = req.query.search; // Search by name, phone, userId
@@ -3177,6 +3178,22 @@ app.get('/api/users/unpaid', async (req, res) => {
         });
         console.log(`🔍 Searching unpaid users by: "${searchTrimmed}"`);
       }
+    }
+
+
+
+    // If rechargeDate filter is provided, match users with this recharge date
+    if (rechargeDate) {
+      const [year, month, day] = rechargeDate.split('-');
+      const dateWithHyphen = `${day}-${month}-${year}`;
+      const dateWithSlash = `${day}/${month}/${year}`;
+      const isoFormat = rechargeDate; // YYYY-MM-DD
+      console.log(`📅 Recharge Date filter: ${rechargeDate} → formats: ${dateWithHyphen}, ${dateWithSlash}, ${isoFormat}`);
+
+      query.$and.push({
+        rechargeDate: { $in: [dateWithHyphen, dateWithSlash, isoFormat] }
+      });
+      console.log(`🔍 Unpaid Query with rechargeDate filter applied`);
     }
 
     // No need to filter by user IDs from vouchers - query already filters by status='unpaid'
