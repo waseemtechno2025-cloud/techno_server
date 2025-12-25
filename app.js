@@ -2501,58 +2501,65 @@ app.get('/api/users/paid', async (req, res) => {
           const paidOrPartialMonths = months.filter((month) => ['paid', 'partial'].includes(month.status));
 
           const monthMatches = paidOrPartialMonths.some((month) => {
-            // Check if date is in range
-            const dateInRange = isDateInRange(month.createdAt) || isDateInRange(month.date) ||
-              (Array.isArray(month.paymentHistory) && month.paymentHistory.some((entry) => isDateInRange(entry?.date)));
+            // Check payment history first (more accurate)
+            const paymentHistory = Array.isArray(month.paymentHistory) ? month.paymentHistory : [];
+            if (paymentHistory.length > 0) {
+              return paymentHistory.some((entry) => {
+                const dateInRange = isDateInRange(entry?.date);
+                if (!dateInRange) return false;
 
+                if (feeCollectorTrimmed) {
+                  const rb = entry.receivedBy || '';
+                  return new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(rb);
+                }
+                return true;
+              });
+            }
+
+            // Fallback to month-level check if no history
+            const dateInRange = isDateInRange(month.createdAt) || isDateInRange(month.date);
             if (!dateInRange) return false;
 
             // Check receivedBy filter
             if (feeCollectorTrimmed) {
-              // Fee collector filter - check if receivedBy matches feeCollector
               const monthReceivedBy = month.receivedBy || '';
-              const paymentHistoryReceivedBy = Array.isArray(month.paymentHistory)
-                ? month.paymentHistory.map((p) => p.receivedBy || '').filter(Boolean)
-                : [];
-
-              const monthMatchesReceivedBy = monthReceivedBy &&
-                new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(monthReceivedBy);
-              const historyMatchesReceivedBy = paymentHistoryReceivedBy.some((rb) =>
-                new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(rb)
-              );
-
-              return monthMatchesReceivedBy || historyMatchesReceivedBy;
-            } else {
-              // No fee collector filter (Admin) - show ALL paid/partial payments regardless of receivedBy
-              return true;
+              return new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(monthReceivedBy);
             }
+            return true;
           });
 
           if (monthMatches) {
             // Calculate total collection from matched paid/partial months
             paidOrPartialMonths.forEach((month) => {
-              const dateInRange = isDateInRange(month.createdAt) || isDateInRange(month.date) ||
-                (Array.isArray(month.paymentHistory) && month.paymentHistory.some((entry) => isDateInRange(entry?.date)));
+              const paymentHistory = Array.isArray(month.paymentHistory) ? month.paymentHistory : [];
 
-              if (dateInRange) {
-                // Check feeCollector filter if provided
-                if (feeCollectorTrimmed) {
-                  const monthReceivedBy = month.receivedBy || '';
-                  const paymentHistoryReceivedBy = Array.isArray(month.paymentHistory)
-                    ? month.paymentHistory.map((p) => p.receivedBy || '').filter(Boolean)
-                    : [];
-
-                  const monthMatchesReceivedBy = monthReceivedBy &&
-                    new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(monthReceivedBy);
-                  const historyMatchesReceivedBy = paymentHistoryReceivedBy.some((rb) =>
-                    new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(rb)
-                  );
-
-                  if (monthMatchesReceivedBy || historyMatchesReceivedBy) {
+              if (paymentHistory.length > 0) {
+                // Sum from matching history entries only
+                paymentHistory.forEach((entry) => {
+                  const dateInRange = isDateInRange(entry?.date);
+                  if (dateInRange) {
+                    if (feeCollectorTrimmed) {
+                      const rb = entry.receivedBy || '';
+                      if (new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(rb)) {
+                        totalCollectionAmount += (entry.amount || 0);
+                      }
+                    } else {
+                      totalCollectionAmount += (entry.amount || 0);
+                    }
+                  }
+                });
+              } else {
+                // Fallback to month level logic
+                const dateInRange = isDateInRange(month.createdAt) || isDateInRange(month.date);
+                if (dateInRange) {
+                  if (feeCollectorTrimmed) {
+                    const monthReceivedBy = month.receivedBy || '';
+                    if (new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i').test(monthReceivedBy)) {
+                      totalCollectionAmount += (month.paidAmount || month.packageFee || 0);
+                    }
+                  } else {
                     totalCollectionAmount += (month.paidAmount || month.packageFee || 0);
                   }
-                } else {
-                  totalCollectionAmount += (month.paidAmount || month.packageFee || 0);
                 }
               }
             });
