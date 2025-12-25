@@ -2566,8 +2566,8 @@ app.get('/api/users/paid', async (req, res) => {
             return true;
           }
 
-          const topLevelMatch = (isDateInRange(voucher.createdAt) || isDateInRange(voucher.updatedAt));
-          return topLevelMatch && paidOrPartialMonths.length > 0;
+          // No fallback - strictly filter by paymentHistory dates only
+          return false;
         });
 
         console.log(`📊 Query result: Found ${filteredVouchers.length} vouchers in date range ${fromDate} to ${toDate}${feeCollectorTrimmed ? ` (filtered by receivedBy: ${feeCollectorTrimmed})` : ''}`);
