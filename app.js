@@ -4686,10 +4686,63 @@ app.post('/api/vouchers', async (req, res) => {
       const existingVoucher = await vouchersCollection.findOne({ userId });
 
       if (existingVoucher) {
+        // SMART MERGE: Combine existing months with new/incoming months
+        // CRITICAL FIX: Do NOT overwrite existing packageFee/discount with new user settings
+        // This prevents the bug where old months (e.g. Dec 200) get overwritten by new rates (e.g. Jan 1200)
+
+        let mergedMonths = [...(existingVoucher.months || [])];
+        let hasChanges = false;
+
+        for (const incoming of sortedMonths) {
+          const existingIndex = mergedMonths.findIndex(m => m.month === incoming.month);
+
+          if (existingIndex >= 0) {
+            // Month exists - Update payment/status but PRESERVE package details
+            const existing = mergedMonths[existingIndex];
+
+            const fee = Number(existing.packageFee || 0);
+            const disc = Number(existing.discount || 0);
+            const paid = Number(incoming.paidAmount !== undefined ? incoming.paidAmount : (existing.paidAmount || 0));
+            const remaining = Math.max(0, fee - disc - paid);
+
+            mergedMonths[existingIndex] = {
+              ...existing,
+              packageFee: fee,
+              discount: disc,
+              paidAmount: paid,
+              remainingAmount: remaining,
+              status: incoming.status || existing.status,
+              paymentMethod: paid > 0 ? (incoming.paymentMethod || existing.paymentMethod) : existing.paymentMethod,
+              receivedBy: paid > 0 ? (incoming.receivedBy || existing.receivedBy) : existing.receivedBy,
+              paymentHistory: incoming.paymentHistory || existing.paymentHistory,
+              description: incoming.description || existing.description,
+              date: existing.date || incoming.date,
+              updatedAt: new Date()
+            };
+            hasChanges = true;
+          } else {
+            // New month - add it with calculation
+            const fee = Number(incoming.packageFee || 0);
+            const disc = Number(incoming.discount || 0);
+            const paid = Number(incoming.paidAmount || 0);
+            const remaining = Math.max(0, fee - disc - paid);
+
+            mergedMonths.push({
+              ...incoming,
+              packageFee: fee,
+              discount: disc,
+              paidAmount: paid,
+              remainingAmount: remaining,
+              createdAt: incoming.createdAt || new Date()
+            });
+            hasChanges = true;
+          }
+        }
+
         // Check if any months being paid have reversed status
         const refundsCollection = db.collection('refunds');
-        const reversedMonthsPaid = sortedMonths.filter(m => {
-          // Find if this month exists in voucher with reversed status
+        const reversedMonthsPaid = mergedMonths.filter(m => {
+          // Find if this month was previously reversed
           const existingMonth = existingVoucher.months?.find(em => em.month === m.month);
           return existingMonth && existingMonth.status === 'reversed' && m.status === 'paid';
         });
@@ -4697,30 +4750,20 @@ app.post('/api/vouchers', async (req, res) => {
         // If reversed months are being paid, delete from refunds collection
         if (reversedMonthsPaid.length > 0) {
           console.log(`🔄 Marking ${reversedMonthsPaid.length} reversed months as paid`);
-
-          // Delete refund records for these months
           for (const month of reversedMonthsPaid) {
             await refundsCollection.updateMany(
               { userId, 'refundedMonths.month': month.month },
               { $pull: { refundedMonths: { month: month.month } } }
             );
           }
-
-          // Remove empty refund records
-          await refundsCollection.deleteMany({
-            userId,
-            refundedMonths: { $size: 0 }
-          });
-
-          console.log(`✅ Removed reversed months from refunds collection`);
+          await refundsCollection.deleteMany({ userId, refundedMonths: { $size: 0 } });
         }
 
-        // CRITICAL: Convert all 'superbalance' months to 'unpaid' when new voucher is created
-        // This happens when expiry date arrives and new month voucher is generated
+        // CRITICAL: Convert 'superbalance' months to 'unpaid'
         let hasSuperBalanceConverted = false;
-        const updatedMonths = sortedMonths.map(month => {
+        const validMonths = mergedMonths.map(month => {
           if (month.status === 'superbalance') {
-            console.log(`⚡ Converting superbalance month '${month.month}' to unpaid (new voucher created)`);
+            console.log(`⚡ Converting superbalance month '${month.month}' to unpaid`);
             hasSuperBalanceConverted = true;
             return {
               ...month,
@@ -4733,14 +4776,22 @@ app.post('/api/vouchers', async (req, res) => {
           return month;
         });
 
-        // Update existing voucher with new months array (in FIFO order)
+        // Sort final list
+        const finalSortedMonths = validMonths.sort((a, b) => {
+          const dateA = parseDate(a.date || a.createdAt);
+          const dateB = parseDate(b.date || b.createdAt);
+          return dateA.getTime() - dateB.getTime();
+        });
+
+        // Update existing voucher with new months array
         const result = await vouchersCollection.updateOne(
           { userId },
           {
             $set: {
-              months: updatedMonths,
+              months: finalSortedMonths,
               rechargeDate: rechargeDate || existingVoucher.rechargeDate,
-              expiryDate: expiryDate || existingVoucher.expiryDate
+              expiryDate: expiryDate || existingVoucher.expiryDate,
+              updatedAt: new Date()
             }
           }
         );
@@ -4969,38 +5020,73 @@ app.post('/api/vouchers', async (req, res) => {
 });
 
 // PUT update voucher by ID (update months array and optional dates)
-app.put('/api/vouchers/:id', async (req, res) => {
+app.put('/api/vouchers/:id', ensureDbConnection, async (req, res) => {
   try {
     if (!ObjectId.isValid(req.params.id)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid voucher ID format'
-      });
+      return res.status(400).json({ success: false, message: 'Invalid voucher ID format' });
     }
 
     const vouchersCollection = db.collection('vouchers');
-    const { months, rechargeDate, expiryDate } = req.body;
+    const updateData = req.body;
+    const { months, rechargeDate, expiryDate, isRefund } = updateData;
     const updateFields = {};
 
+    // 1. HANDLE REFUNDS (Reversals)
+    if (months && Array.isArray(months) && isRefund) {
+      console.log('🔄 REFUND DETECTED');
+      const voucher = await vouchersCollection.findOne({ _id: new ObjectId(req.params.id) });
+      if (voucher) {
+        const usersCollection = db.collection('users');
+        const user = await usersCollection.findOne({ _id: new ObjectId(voucher.userId) });
+        const reversedMonths = months.filter(m => m.status === 'reversed');
+
+        if (reversedMonths.length > 0) {
+          const refundsCollection = db.collection('refunds');
+          const refundRecord = {
+            userId: voucher.userId,
+            voucherId: voucher._id.toString(),
+            userName: user?.userName || 'Unknown',
+            packageName: user?.packageName || 'Unknown',
+            refundedMonths: reversedMonths.map(m => ({
+              month: m.month,
+              packageFee: Number(m.packageFee || 0),
+              discount: Number(m.discount || 0),
+              refundedAmount: Number(m.refundedAmount || m.paidAmount || 0),
+              remainingAmount: Number(m.remainingAmount || 0),
+              refundDate: m.refundDate || new Date().toISOString()
+            })),
+            status: 'reversed',
+            createdAt: new Date(),
+            totalRefundedAmount: reversedMonths.reduce((sum, m) => sum + Number(m.refundedAmount || m.paidAmount || 0), 0)
+          };
+          await refundsCollection.insertOne(refundRecord);
+
+          if (months.every(m => m.status === 'reversed')) {
+            await usersCollection.updateOne({ _id: new ObjectId(voucher.userId) }, { $set: { status: 'reversed' } });
+          }
+        }
+      }
+    }
+
     if (Array.isArray(months)) {
-      // CRITICAL: Sort months by date (FIFO - First In First Out) before storing
-      // This ensures months are always stored in chronological order (earliest first)
-      // Payment distribution should apply to earliest months first (e.g., Oct before Nov)
+      // Fetch existing voucher to perform smart merge
+      const existingVoucher = await vouchersCollection.findOne({ _id: new ObjectId(req.params.id) });
+
+      if (!existingVoucher) {
+        return res.status(404).json({ success: false, message: 'Voucher not found' });
+      }
+
+      // CRITICAL: Sort incoming months by date (FIFO - First In First Out)
       const parseDate = (dateStr) => {
         if (!dateStr) return new Date(0);
         if (dateStr instanceof Date) return dateStr;
         if (typeof dateStr === 'string') {
-          // Check if ISO format (YYYY-MM-DD or full ISO string)
           if (/^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
-            // ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss.sssZ
             const parsed = new Date(dateStr);
             if (!isNaN(parsed.getTime())) return parsed;
           }
-
-          // Try DD-MM-YYYY format
           const parts = dateStr.split('-');
           if (parts.length === 3 && parts[2].length === 4) {
-            // DD-MM-YYYY format (last part is year with 4 digits)
             const day = parseInt(parts[0], 10);
             const month = parseInt(parts[1], 10) - 1;
             const year = parseInt(parts[2], 10);
@@ -5008,33 +5094,83 @@ app.put('/api/vouchers/:id', async (req, res) => {
               return new Date(year, month, day);
             }
           }
-
-          // Fallback to standard Date parsing
           const parsed = new Date(dateStr);
           return isNaN(parsed.getTime()) ? new Date(0) : parsed;
         }
         return new Date(0);
       };
 
-      const sortedMonths = [...months].sort((a, b) => {
+      const sortedIncoming = [...months].sort((a, b) => {
         const dateA = parseDate(a.date || a.createdAt);
         const dateB = parseDate(b.date || b.createdAt);
-        return dateA.getTime() - dateB.getTime(); // Ascending: earliest first
+        return dateA.getTime() - dateB.getTime();
       });
 
-      console.log(`📅 Backend PUT: Months sorted by date (FIFO order):`, sortedMonths.map(m => `${m.month} (${m.date || m.createdAt})`).join(', '));
-      updateFields.months = sortedMonths;
+      // SMART MERGE & RECALCULATION
+      const mergedMonths = [...(existingVoucher.months || [])];
+
+      for (const incoming of sortedIncoming) {
+        const existingIndex = mergedMonths.findIndex(m => m.month === incoming.month);
+
+        if (existingIndex >= 0) {
+          // UPDATE EXISTING MONTH
+          const existing = mergedMonths[existingIndex];
+
+          // PRESERVE: packageFee and discount from database (source of truth)
+          const fee = Number(existing.packageFee || 0);
+          const disc = Number(existing.discount || 0);
+
+          // UPDATE: payment info from incoming
+          const paid = Number(incoming.paidAmount !== undefined ? incoming.paidAmount : (existing.paidAmount || 0));
+
+          // RECALCULATE: Forced consistency check (mathematical truth)
+          const remaining = Math.max(0, fee - disc - paid);
+
+          mergedMonths[existingIndex] = {
+            ...existing,
+            packageFee: fee,
+            discount: disc,
+            paidAmount: paid,
+            remainingAmount: remaining,
+            status: incoming.status || existing.status,
+            paymentMethod: paid > 0 ? (incoming.paymentMethod || existing.paymentMethod) : existing.paymentMethod,
+            receivedBy: paid > 0 ? (incoming.receivedBy || existing.receivedBy) : existing.receivedBy,
+            paymentHistory: incoming.paymentHistory || existing.paymentHistory,
+            description: incoming.description || existing.description,
+            date: existing.date || incoming.date,
+            updatedAt: new Date()
+          };
+        } else {
+          // ADD NEW MONTH
+          const fee = Number(incoming.packageFee || 0);
+          const disc = Number(incoming.discount || 0);
+          const paid = Number(incoming.paidAmount || 0);
+          const remaining = Math.max(0, fee - disc - paid);
+
+          mergedMonths.push({
+            ...incoming,
+            packageFee: fee,
+            discount: disc,
+            paidAmount: paid,
+            remainingAmount: remaining,
+            createdAt: incoming.createdAt || new Date()
+          });
+        }
+      }
+
+      // Final sort
+      updateFields.months = mergedMonths.sort((a, b) => {
+        const dateA = parseDate(a.date || a.createdAt);
+        const dateB = parseDate(b.date || b.createdAt);
+        return dateA.getTime() - dateB.getTime();
+      });
+
+      console.log(`📅 Backend PUT: Smart merged ${mergedMonths.length} months for voucher ${req.params.id}`);
     }
+
     if (rechargeDate !== undefined) updateFields.rechargeDate = rechargeDate || null;
     if (expiryDate !== undefined) updateFields.expiryDate = expiryDate || null;
     updateFields.updatedAt = new Date();
-
-    if (Object.keys(updateFields).length === 1 && updateFields.updatedAt) {
-      return res.status(400).json({
-        success: false,
-        message: 'No fields to update'
-      });
-    }
 
     const result = await vouchersCollection.updateOne(
       { _id: new ObjectId(req.params.id) },
@@ -6683,151 +6819,6 @@ app.get('/api/vouchers/user/:userId', ensureDbConnection, async (req, res) => {
   }
 });
 
-// PUT update voucher
-app.put('/api/vouchers/:id', ensureDbConnection, async (req, res) => {
-  try {
-    if (!ObjectId.isValid(req.params.id)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid voucher ID format'
-      });
-    }
-
-    const updateData = req.body;
-
-    // Check if this is a refund operation (has reversed months)
-    if (updateData.months && updateData.isRefund) {
-      console.log('🔄 REFUND DETECTED');
-
-      // Get the voucher to access user info
-      const voucher = await vouchersCollection.findOne({ _id: new ObjectId(req.params.id) });
-
-      if (!voucher) {
-        return res.status(404).json({
-          success: false,
-          message: 'Voucher not found'
-        });
-      }
-
-      // Get user details
-      const user = await usersCollection.findOne({ _id: new ObjectId(voucher.userId) });
-
-      // Find months that were set to reversed
-      const reversedMonths = updateData.months.filter(m => m.status === 'reversed');
-
-      if (reversedMonths.length > 0) {
-        // Create refund collection entry
-        const refundsCollection = db.collection('refunds');
-        const refundRecord = {
-          userId: voucher.userId,
-          voucherId: voucher._id.toString(),
-          userName: user?.userName || 'Unknown',
-          packageName: user?.packageName || 'Unknown',
-          refundedMonths: reversedMonths.map(m => ({
-            month: m.month,
-            packageFee: m.packageFee,
-            discount: m.discount || 0,
-            refundedAmount: m.refundedAmount || m.paidAmount || 0,
-            remainingAmount: m.remainingAmount,
-            refundDate: m.refundDate || new Date().toISOString()
-          })),
-          status: 'reversed',
-          createdAt: new Date(),
-          totalRefundedAmount: reversedMonths.reduce((sum, m) => sum + (m.refundedAmount || m.paidAmount || 0), 0)
-        };
-
-        const insertResult = await refundsCollection.insertOne(refundRecord);
-        console.log(`✅ REFUND SAVED: ${user?.userName} - ${reversedMonths.length} months - ID: ${insertResult.insertedId}`);
-
-        // Check if ALL months are now reversed
-        const totalMonths = updateData.months.length;
-        const allReversed = updateData.months.every(m => m.status === 'reversed');
-
-        if (allReversed) {
-          console.log(`🔄 ALL ${totalMonths} months reversed - removing user from unpaid list`);
-          // Change user status from 'unpaid' to 'reversed' so they don't appear in unpaid section
-          await usersCollection.updateOne(
-            { _id: new ObjectId(voucher.userId) },
-            { $set: { status: 'reversed' } }
-          );
-          console.log(`✅ User ${user?.userName} marked as 'reversed' (excluded from unpaid)`);
-        } else {
-          console.log(`⚠️ Partial refund: ${reversedMonths.length}/${totalMonths} months reversed - user stays in unpaid`);
-        }
-      }
-    }
-
-    // Remove isRefund flag before updating voucher
-    delete updateData.isRefund;
-
-    // CRITICAL: Sort months by date (FIFO - First In First Out) before storing
-    // This ensures months are always stored in chronological order (earliest first)
-    if (updateData.months && Array.isArray(updateData.months)) {
-      const parseDate = (dateStr) => {
-        if (!dateStr) return new Date(0);
-        if (dateStr instanceof Date) return dateStr;
-        if (typeof dateStr === 'string') {
-          // Check if ISO format (YYYY-MM-DD or full ISO string)
-          if (/^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
-            // ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss.sssZ
-            const parsed = new Date(dateStr);
-            if (!isNaN(parsed.getTime())) return parsed;
-          }
-
-          // Try DD-MM-YYYY format
-          const parts = dateStr.split('-');
-          if (parts.length === 3 && parts[2].length === 4) {
-            // DD-MM-YYYY format (last part is year with 4 digits)
-            const day = parseInt(parts[0], 10);
-            const month = parseInt(parts[1], 10) - 1;
-            const year = parseInt(parts[2], 10);
-            if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
-              return new Date(year, month, day);
-            }
-          }
-
-          // Fallback to standard Date parsing
-          const parsed = new Date(dateStr);
-          return isNaN(parsed.getTime()) ? new Date(0) : parsed;
-        }
-        return new Date(0);
-      };
-
-      const sortedMonths = [...updateData.months].sort((a, b) => {
-        const dateA = parseDate(a.date || a.createdAt);
-        const dateB = parseDate(b.date || b.createdAt);
-        return dateA.getTime() - dateB.getTime(); // Ascending: earliest first
-      });
-
-      console.log(`📅 Backend PUT (with refund): Months sorted by date (FIFO order):`, sortedMonths.map(m => `${m.month} (${m.date || m.createdAt})`).join(', '));
-      updateData.months = sortedMonths;
-    }
-
-    const result = await vouchersCollection.updateOne(
-      { _id: new ObjectId(req.params.id) },
-      { $set: updateData }
-    );
-
-    if (result.matchedCount === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Voucher not found'
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      message: 'Voucher updated successfully'
-    });
-  } catch (error) {
-    console.error('Error updating voucher:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error updating voucher',
-      error: error.message
-    });
-  }
-});
 
 // POST create refund
 app.post('/api/refunds', ensureDbConnection, async (req, res) => {
