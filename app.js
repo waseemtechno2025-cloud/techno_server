@@ -5028,7 +5028,7 @@ app.put('/api/vouchers/:id', ensureDbConnection, async (req, res) => {
 
     const vouchersCollection = db.collection('vouchers');
     const updateData = req.body;
-    const { months, rechargeDate, expiryDate, isRefund } = updateData;
+    const { months, rechargeDate, expiryDate, isRefund, mode } = updateData;
     const updateFields = {};
 
     // 1. HANDLE REFUNDS (Reversals)
@@ -5069,103 +5069,113 @@ app.put('/api/vouchers/:id', ensureDbConnection, async (req, res) => {
     }
 
     if (Array.isArray(months)) {
-      // Fetch existing voucher to perform smart merge
-      const existingVoucher = await vouchersCollection.findOne({ _id: new ObjectId(req.params.id) });
+      if (mode === 'replace') {
+        // DELETE/RESET MODE: specific for removing months
+        updateFields.months = months.sort((a, b) => {
+          const dA = a.date ? new Date(a.date) : new Date(0);
+          const dB = b.date ? new Date(b.date) : new Date(0);
+          return dA.getTime() - dB.getTime();
+        });
+        console.log(`🗑️ Backend PUT: REPLACED months array with ${months.length} items`);
+      } else {
+        // Fetch existing voucher to perform smart merge
+        const existingVoucher = await vouchersCollection.findOne({ _id: new ObjectId(req.params.id) });
 
-      if (!existingVoucher) {
-        return res.status(404).json({ success: false, message: 'Voucher not found' });
-      }
+        if (!existingVoucher) {
+          return res.status(404).json({ success: false, message: 'Voucher not found' });
+        }
 
-      // CRITICAL: Sort incoming months by date (FIFO - First In First Out)
-      const parseDate = (dateStr) => {
-        if (!dateStr) return new Date(0);
-        if (dateStr instanceof Date) return dateStr;
-        if (typeof dateStr === 'string') {
-          if (/^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
-            const parsed = new Date(dateStr);
-            if (!isNaN(parsed.getTime())) return parsed;
-          }
-          const parts = dateStr.split(/[-\/]/);
-          if (parts.length === 3 && parts[2].length === 4) {
-            const day = parseInt(parts[0], 10);
-            const month = parseInt(parts[1], 10) - 1;
-            const year = parseInt(parts[2], 10);
-            if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
-              return new Date(year, month, day);
+        // CRITICAL: Sort incoming months by date (FIFO - First In First Out)
+        const parseDate = (dateStr) => {
+          if (!dateStr) return new Date(0);
+          if (dateStr instanceof Date) return dateStr;
+          if (typeof dateStr === 'string') {
+            if (/^\d{4}-\d{2}-\d{2}/.test(dateStr)) {
+              const parsed = new Date(dateStr);
+              if (!isNaN(parsed.getTime())) return parsed;
             }
+            const parts = dateStr.split(/[-\/]/);
+            if (parts.length === 3 && parts[2].length === 4) {
+              const day = parseInt(parts[0], 10);
+              const month = parseInt(parts[1], 10) - 1;
+              const year = parseInt(parts[2], 10);
+              if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
+                return new Date(year, month, day);
+              }
+            }
+            const parsed = new Date(dateStr);
+            return isNaN(parsed.getTime()) ? new Date(0) : parsed;
           }
-          const parsed = new Date(dateStr);
-          return isNaN(parsed.getTime()) ? new Date(0) : parsed;
+          return new Date(0);
+        };
+
+        const sortedIncoming = [...months].sort((a, b) => {
+          const dateA = parseDate(a.date || a.createdAt);
+          const dateB = parseDate(b.date || b.createdAt);
+          return dateA.getTime() - dateB.getTime();
+        });
+
+        // SMART MERGE & RECALCULATION
+        const mergedMonths = [...(existingVoucher.months || [])];
+
+        for (const incoming of sortedIncoming) {
+          const existingIndex = mergedMonths.findIndex(m => m.month === incoming.month);
+
+          if (existingIndex >= 0) {
+            // UPDATE EXISTING MONTH
+            const existing = mergedMonths[existingIndex];
+
+            // PRESERVE: packageFee and discount from database (source of truth)
+            const fee = Number(existing.packageFee || 0);
+            const disc = Number(existing.discount || 0);
+
+            // UPDATE: payment info from incoming
+            const paid = Number(incoming.paidAmount !== undefined ? incoming.paidAmount : (existing.paidAmount || 0));
+
+            // RECALCULATE: Forced consistency check (mathematical truth)
+            const remaining = Math.max(0, fee - disc - paid);
+
+            mergedMonths[existingIndex] = {
+              ...existing,
+              packageFee: fee,
+              discount: disc,
+              paidAmount: paid,
+              remainingAmount: remaining,
+              status: incoming.status || existing.status,
+              paymentMethod: paid > 0 ? (incoming.paymentMethod || existing.paymentMethod) : existing.paymentMethod,
+              receivedBy: paid > 0 ? (incoming.receivedBy || existing.receivedBy) : existing.receivedBy,
+              paymentHistory: incoming.paymentHistory || existing.paymentHistory,
+              description: incoming.description || existing.description,
+              date: existing.date || incoming.date,
+              updatedAt: new Date()
+            };
+          } else {
+            // ADD NEW MONTH
+            const fee = Number(incoming.packageFee || 0);
+            const disc = Number(incoming.discount || 0);
+            const paid = Number(incoming.paidAmount || 0);
+            const remaining = Math.max(0, fee - disc - paid);
+
+            mergedMonths.push({
+              ...incoming,
+              packageFee: fee,
+              discount: disc,
+              paidAmount: paid,
+              remainingAmount: remaining,
+              createdAt: incoming.createdAt || new Date()
+            });
+          }
         }
-        return new Date(0);
-      };
 
-      const sortedIncoming = [...months].sort((a, b) => {
-        const dateA = parseDate(a.date || a.createdAt);
-        const dateB = parseDate(b.date || b.createdAt);
-        return dateA.getTime() - dateB.getTime();
-      });
+        // Final sort
+        updateFields.months = mergedMonths.sort((a, b) => {
+          const dateA = parseDate(a.date || a.createdAt);
+          const dateB = parseDate(b.date || b.createdAt);
+          return dateA.getTime() - dateB.getTime();
+        });
 
-      // SMART MERGE & RECALCULATION
-      const mergedMonths = [...(existingVoucher.months || [])];
-
-      for (const incoming of sortedIncoming) {
-        const existingIndex = mergedMonths.findIndex(m => m.month === incoming.month);
-
-        if (existingIndex >= 0) {
-          // UPDATE EXISTING MONTH
-          const existing = mergedMonths[existingIndex];
-
-          // PRESERVE: packageFee and discount from database (source of truth)
-          const fee = Number(existing.packageFee || 0);
-          const disc = Number(existing.discount || 0);
-
-          // UPDATE: payment info from incoming
-          const paid = Number(incoming.paidAmount !== undefined ? incoming.paidAmount : (existing.paidAmount || 0));
-
-          // RECALCULATE: Forced consistency check (mathematical truth)
-          const remaining = Math.max(0, fee - disc - paid);
-
-          mergedMonths[existingIndex] = {
-            ...existing,
-            packageFee: fee,
-            discount: disc,
-            paidAmount: paid,
-            remainingAmount: remaining,
-            status: incoming.status || existing.status,
-            paymentMethod: paid > 0 ? (incoming.paymentMethod || existing.paymentMethod) : existing.paymentMethod,
-            receivedBy: paid > 0 ? (incoming.receivedBy || existing.receivedBy) : existing.receivedBy,
-            paymentHistory: incoming.paymentHistory || existing.paymentHistory,
-            description: incoming.description || existing.description,
-            date: existing.date || incoming.date,
-            updatedAt: new Date()
-          };
-        } else {
-          // ADD NEW MONTH
-          const fee = Number(incoming.packageFee || 0);
-          const disc = Number(incoming.discount || 0);
-          const paid = Number(incoming.paidAmount || 0);
-          const remaining = Math.max(0, fee - disc - paid);
-
-          mergedMonths.push({
-            ...incoming,
-            packageFee: fee,
-            discount: disc,
-            paidAmount: paid,
-            remainingAmount: remaining,
-            createdAt: incoming.createdAt || new Date()
-          });
-        }
+        console.log(`📅 Backend PUT: Smart merged ${mergedMonths.length} months for voucher ${req.params.id}`);
       }
-
-      // Final sort
-      updateFields.months = mergedMonths.sort((a, b) => {
-        const dateA = parseDate(a.date || a.createdAt);
-        const dateB = parseDate(b.date || b.createdAt);
-        return dateA.getTime() - dateB.getTime();
-      });
-
-      console.log(`📅 Backend PUT: Smart merged ${mergedMonths.length} months for voucher ${req.params.id}`);
     }
 
     if (rechargeDate !== undefined) updateFields.rechargeDate = rechargeDate || null;
