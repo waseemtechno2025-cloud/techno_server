@@ -4655,10 +4655,10 @@ app.post('/api/vouchers', async (req, res) => {
             if (!isNaN(parsed.getTime())) return parsed;
           }
 
-          // Try DD-MM-YYYY format
-          const parts = dateStr.split('-');
+          // Try DD-MM-YYYY or DD/MM/YYYY format
+          const parts = dateStr.split(/[-\/]/);
           if (parts.length === 3 && parts[2].length === 4) {
-            // DD-MM-YYYY format (last part is year with 4 digits)
+            // Check if year is 4 digits
             const day = parseInt(parts[0], 10);
             const month = parseInt(parts[1], 10) - 1;
             const year = parseInt(parts[2], 10);
@@ -5085,7 +5085,7 @@ app.put('/api/vouchers/:id', ensureDbConnection, async (req, res) => {
             const parsed = new Date(dateStr);
             if (!isNaN(parsed.getTime())) return parsed;
           }
-          const parts = dateStr.split('-');
+          const parts = dateStr.split(/[-\/]/);
           if (parts.length === 3 && parts[2].length === 4) {
             const day = parseInt(parts[0], 10);
             const month = parseInt(parts[1], 10) - 1;
