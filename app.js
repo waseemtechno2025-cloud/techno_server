@@ -2805,9 +2805,9 @@ app.get('/api/users/paid', async (req, res) => {
           ]
         },
         {
-          // Include both 'paid' and 'partial' users
-          // Paid tab = Users who have made payments (including partial)
-          status: { $in: ['paid', 'partial'] }
+          // Include 'unpaid' users who have at least one paid month in vouchers
+          // This ensures users with multi-month vouchers (like Aam Tech) show up
+          status: { $in: ['paid', 'partial', 'unpaid'] }
         }
       ]
     };
