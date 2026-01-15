@@ -1638,7 +1638,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
         // Check if voucher has paid months
         // If feeCollector filter is provided, also check receivedBy
         const hasPaidMonth = voucher.months.some(m => {
-          const isPaid = m.status === 'paid' || m.status === 'partial';
+          const isPaid = m.status === 'paid' || (m.status === 'partial' && Number(m.paidAmount || 0) > 0);
           if (!isPaid) return false;
 
           // If feeCollector filter is provided, check receivedBy
@@ -2797,7 +2797,8 @@ app.get('/api/users/paid', async (req, res) => {
           // If feeCollector filter is provided, also check receivedBy
           const hasPaidMonth = voucher.months.some(m => {
             // Include both 'paid' and 'partial' status (show users who made payments)
-            const isPaid = m.status === 'paid' || m.status === 'partial';
+            // Include 'paid' (fully paid) or 'partial' (only if they actually paid something)
+            const isPaid = m.status === 'paid' || (m.status === 'partial' && Number(m.paidAmount || 0) > 0);
             if (!isPaid) return false;
 
             // Check receivedBy filter
