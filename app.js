@@ -1638,7 +1638,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
         // Check if voucher has paid months
         // If feeCollector filter is provided, also check receivedBy
         const hasPaidMonth = voucher.months.some(m => {
-          const isPaid = m.status === 'paid' || (m.status === 'partial' && m.paidAmount > 0);
+          const isPaid = m.status === 'paid' || m.status === 'partial';
           if (!isPaid) return false;
 
           // If feeCollector filter is provided, check receivedBy
@@ -1690,14 +1690,19 @@ app.get('/api/dashboard/stats', async (req, res) => {
     });
 
     // Build paid users query with filter
-    // CRITICAL: Use receivedBy-based filtering for both fee collector and admin
-    // This ensures paid users count matches what's shown in paid users list
+    // CRITICAL: Matches /api/users/paid logic - include 'unpaid' status if they have paid months
     let paidUsersQuery = {
-      $or: [
-        { serviceStatus: { $ne: 'inactive' } },
-        { serviceStatus: { $exists: false } }
-      ],
-      status: { $in: ['paid', 'partial'] } // Only count paid/partial users
+      $and: [
+        {
+          $or: [
+            { serviceStatus: { $ne: 'inactive' } },
+            { serviceStatus: { $exists: false } }
+          ]
+        },
+        {
+          status: { $in: ['paid', 'partial', 'unpaid', 'superbalance'] }
+        }
+      ]
     };
 
     // Use userIds calculated from vouchers (receivedBy filter already applied)
@@ -1712,14 +1717,12 @@ app.get('/api/dashboard/stats', async (req, res) => {
       }
 
       // Exclude users expiring TODAY or TOMORROW (expiring soon users)
-      paidUsersQuery.$and = [
-        {
-          $or: [
-            { showInExpiringSoon: { $ne: true } },
-            { showInExpiringSoon: { $exists: false } }
-          ]
-        }
-      ];
+      paidUsersQuery.$and.push({
+        $or: [
+          { showInExpiringSoon: { $ne: true } },
+          { showInExpiringSoon: { $exists: false } }
+        ]
+      });
 
       // Count all paid users (excluding expiring soon)
       // This ensures dashboard stats match paid-users page
@@ -1920,7 +1923,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
 
     console.log(`📊 Dashboard Stats - Unpaid users calculation:`);
     console.log(`   - totalUsers: ${totalUsers}, paidUsers: ${paidUsers}, unpaidUsers: ${unpaidUsers}`);
-    console.log(`   - Unpaid users counted by status='unpaid' ONLY (balance/partial users excluded)`);
+    console.log(`   - Unpaid users include status='unpaid' AND status='partial' with unpaid months (Dual Visibility)`);
     console.log(`   - Excludes expiring soon users (showInExpiringSoon=true)`);
 
 
