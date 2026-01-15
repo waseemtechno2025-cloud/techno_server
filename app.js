@@ -1545,6 +1545,21 @@ app.get('/api/dashboard/stats', async (req, res) => {
       console.log(`🔍 Filtering dashboard stats by assignTo (case-insensitive): ${assignToTrimmed}`);
     }
 
+    // 🔍 Pre-fetch user IDs with unpaid/partial months for accurate counting
+    const [vouchersWithUnpaidMonths, vouchersWithPartialMonths] = await Promise.all([
+      vouchersCol.find({ 'months.status': 'unpaid' }).project({ userId: 1 }).toArray(),
+      vouchersCol.find({ 'months.status': 'partial' }).project({ userId: 1 }).toArray()
+    ]);
+    const userIdsWithUnpaidMonthsForStats = vouchersWithUnpaidMonths.map(v => v.userId.toString());
+    const userIdsWithPartialMonthsForStats = vouchersWithPartialMonths.map(v => v.userId.toString());
+
+    const objectIdsWithUnpaid = userIdsWithUnpaidMonthsForStats.map(id => {
+      try { return new ObjectId(id); } catch (e) { return id; }
+    });
+    const objectIdsWithPartial = userIdsWithPartialMonthsForStats.map(id => {
+      try { return new ObjectId(id); } catch (e) { return id; }
+    });
+
     // Get user IDs that match the filter (for voucher filtering)
     // CRITICAL: For fee collector, we should NOT pre-filter by user.feeCollector
     // Instead, check receivedBy in vouchers directly (same as paid-users endpoint)
@@ -1853,13 +1868,27 @@ app.get('/api/dashboard/stats', async (req, res) => {
     });
 
     // Build unpaid users query with filter
-    // CRITICAL: Count ONLY users with status='unpaid' (NOT 'partial')
-    // Partial/balance users should NOT be counted here - they show in Balance tab only
+    // CRITICAL: Count users with status='unpaid' OR users with status='partial' who still have 'unpaid' months
+    // This matches the updated /api/users/unpaid list logic
     let unpaidUsersQuery = {
-      status: 'unpaid', // Only unpaid, NOT partial (balance users show separately)
-      $or: [
-        { serviceStatus: { $ne: 'inactive' } },
-        { serviceStatus: { $exists: false } }
+      $and: [
+        {
+          $or: [
+            { serviceStatus: { $ne: 'inactive' } },
+            { serviceStatus: { $exists: false } }
+          ]
+        },
+        {
+          $or: [
+            { status: 'unpaid' },
+            {
+              $and: [
+                { status: 'partial' },
+                { _id: { $in: objectIdsWithUnpaid } }
+              ]
+            }
+          ]
+        }
       ]
     };
 
@@ -1874,14 +1903,12 @@ app.get('/api/dashboard/stats', async (req, res) => {
     }
 
     // Exclude users expiring TODAY or TOMORROW (expiring soon users)
-    unpaidUsersQuery.$and = [
-      {
-        $or: [
-          { showInExpiringSoon: { $ne: true } },
-          { showInExpiringSoon: { $exists: false } }
-        ]
-      }
-    ];
+    unpaidUsersQuery.$and.push({
+      $or: [
+        { showInExpiringSoon: { $ne: true } },
+        { showInExpiringSoon: { $exists: false } }
+      ]
+    });
 
     // Count only unpaid users (excluding partial/balance users)
     // Example scenarios:
@@ -2218,10 +2245,24 @@ app.get('/api/dashboard/stats', async (req, res) => {
 
     // Get unpaid and partial users (same as unpaid-users.tsx)
     let unpaidUsersListQuery = {
-      status: 'unpaid',
-      $or: [
-        { serviceStatus: { $ne: 'inactive' } },
-        { serviceStatus: { $exists: false } }
+      $and: [
+        {
+          $or: [
+            { serviceStatus: { $ne: 'inactive' } },
+            { serviceStatus: { $exists: false } }
+          ]
+        },
+        {
+          $or: [
+            { status: 'unpaid' },
+            {
+              $and: [
+                { status: 'partial' },
+                { _id: { $in: objectIdsWithUnpaid } }
+              ]
+            }
+          ]
+        }
       ]
     };
     if (feeCollector) {
@@ -2243,11 +2284,27 @@ app.get('/api/dashboard/stats', async (req, res) => {
     console.log(`📊 Outstanding - Unpaid users: ${allUnpaidUsersList.length} total, ${unpaidUsersList.length} after excluding expiring soon`);
 
     let partialUsersQuery = {
-      status: 'partial',
-      remainingAmount: { $gt: 0 },
-      $or: [
-        { serviceStatus: { $ne: 'inactive' } },
-        { serviceStatus: { $exists: false } }
+      $and: [
+        {
+          $or: [
+            { serviceStatus: { $ne: 'inactive' } },
+            { serviceStatus: { $exists: false } }
+          ]
+        },
+        // CRITICAL: Show users with 'partial' OR 'superbalance' status
+        // AND include 'unpaid' users who have at least one partial month
+        {
+          $or: [
+            { status: 'partial', remainingAmount: { $gt: 0 } },
+            { status: 'superbalance' },
+            {
+              $and: [
+                { status: 'unpaid' },
+                { _id: { $in: objectIdsWithPartial } }
+              ]
+            }
+          ]
+        }
       ]
     };
     if (feeCollector) {
@@ -3149,6 +3206,13 @@ app.get('/api/users/unpaid', async (req, res) => {
 
     console.log(`📊 Fetching unpaid users by status (including future expiry dates)`);
 
+    // 🔍 Find users who have at least one 'unpaid' month in their vouchers
+    // This allows show them in Unpaid list even if their overall status is 'partial'
+    const vouchersWithUnpaid = await vouchersCollection.find({
+      'months.status': 'unpaid'
+    }).project({ userId: 1 }).toArray();
+    const userIdsWithUnpaidMonths = vouchersWithUnpaid.map(v => v.userId.toString());
+
     // Base query - active users with unpaid or partial status
     let query = {
       $and: [
@@ -3158,9 +3222,23 @@ app.get('/api/users/unpaid', async (req, res) => {
             { serviceStatus: { $exists: false } }
           ]
         },
-        // ✅ FIXED: Include ONLY unpaid users (exclude partial/balance users)
-        // Partial users should ONLY appear in Balance tab, NOT in Unpaid tab
-        { status: 'unpaid' }
+        {
+          $or: [
+            { status: 'unpaid' },
+            {
+              $and: [
+                { status: 'partial' },
+                {
+                  _id: {
+                    $in: userIdsWithUnpaidMonths.map(id => {
+                      try { return new ObjectId(id); } catch (e) { return id; }
+                    })
+                  }
+                }
+              ]
+            }
+          ]
+        }
       ]
     };
 
@@ -3575,9 +3653,12 @@ app.get('/api/balances', async (req, res) => {
     const assignTo = req.query.assignTo; // Technician assignment filter
     const search = req.query.search; // Search by name, phone, userId
 
-    // CRITICAL: Balance tab should show ONLY users with status 'partial'
-    // Simple logic: status = 'partial' means user has made some payment but has remaining amount
-    // No need to check vouchers - user status is the source of truth
+    // 🔍 Find users who have at least one 'partial' (balanced) month in their vouchers
+    // This allows show them in Balance list even if their overall status is 'unpaid'
+    const vouchersWithPartial = await vouchersCollection.find({
+      'months.status': 'partial'
+    }).project({ userId: 1 }).toArray();
+    const userIdsWithPartialMonths = vouchersWithPartial.map(v => v.userId.toString());
 
     // Base query - include users with status 'partial' OR 'superbalance'
     // 'partial' = normal partial payment
@@ -3591,11 +3672,23 @@ app.get('/api/balances', async (req, res) => {
           ]
         },
         // CRITICAL: Show users with 'partial' OR 'superbalance' status
-        // 'superbalance' = advance payment tracking (shows ONLY in Balance tab)
+        // AND include 'unpaid' users who have at least one partial month
         {
           $or: [
             { status: 'partial', remainingAmount: { $gt: 0 } },
-            { status: 'superbalance' }
+            { status: 'superbalance' },
+            {
+              $and: [
+                { status: 'unpaid' },
+                {
+                  _id: {
+                    $in: userIdsWithPartialMonths.map(id => {
+                      try { return new ObjectId(id); } catch (e) { return id; }
+                    })
+                  }
+                }
+              ]
+            }
           ]
         }
       ]
