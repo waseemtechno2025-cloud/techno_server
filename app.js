@@ -1996,11 +1996,15 @@ app.get('/api/dashboard/stats', async (req, res) => {
     let bankIncome = 0;
     const feeCollectorTrimmed = feeCollector ? feeCollector.trim() : null;
 
-    // CHECK INCOMES COLLECTION FIRST
     const incomesCol = db.collection('incomes');
     let shouldRecalculate = false;
 
-    if (feeCollectorTrimmed) {
+    // CRITICAL: Ensure we don't query for "null" or "undefined" as strings
+    const isValidCollector = feeCollectorTrimmed &&
+      feeCollectorTrimmed.toLowerCase() !== 'null' &&
+      feeCollectorTrimmed.toLowerCase() !== 'undefined';
+
+    if (isValidCollector) {
       // Check if fee collector has existing income in database
       const existingIncome = await incomesCol.findOne({
         name: { $regex: new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
@@ -8028,8 +8032,14 @@ app.post('/api/collections/transfer', ensureDbConnection, async (req, res) => {
     console.log('🔵 Incomes collection namespace:', incomesCol.namespace);
 
     // Check if fee collector has enough income to transfer
-    const feeCollectorIncome = await incomesCol.findOne({ name: feeCollector.trim() });
+    // Case-insensitive lookup (consistent with stats calculation)
+    const feeCollectorTrimmed = feeCollector.trim();
+    const feeCollectorRegex = new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+
+    const feeCollectorIncome = await incomesCol.findOne({ name: feeCollectorRegex });
     let currentIncome = feeCollectorIncome?.cashIncome || 0;
+    const actualName = feeCollectorIncome?.name || feeCollectorTrimmed; // Use name from DB if found
+    console.log(`💰 Fee collector "${actualName}" current cashIncome: Rs${currentIncome}`);
     console.log(`💰 Fee collector current cashIncome: Rs${currentIncome}`);
 
     // Fallback: If incomes collection is empty/not synced, calculate from vouchers
@@ -8101,24 +8111,21 @@ app.post('/api/collections/transfer', ensureDbConnection, async (req, res) => {
 
     // 💰 UPDATE INCOME: Decrease fee collector's income and increase Admin's income
     // First, ensure the fee collector has an income record
-    const feeCollectorTrimmed = feeCollector.trim();
-    console.log('🔍 ===== INCOME UPDATE DEBUG =====');
-    console.log('🔍 Searching for fee collector income record:', feeCollectorTrimmed);
-    console.log('🔍 Search pattern:', `^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`);
-
+    // We already identified actualName and feeCollectorRegex in the check above
     const feeCollectorIncomeRecord = await incomesCol.findOne({
-      name: { $regex: new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+      name: feeCollectorRegex
     });
     console.log('🔍 Fee collector income record found:', feeCollectorIncomeRecord ? `Yes (ID: ${feeCollectorIncomeRecord._id}, Name: "${feeCollectorIncomeRecord.name}", Current cashIncome: Rs${feeCollectorIncomeRecord.cashIncome || 0})` : 'No');
 
     if (feeCollectorIncomeRecord) {
       // Update existing fee collector income - CUT from cashIncome ONLY
-      console.log(`💰 Updating fee collector income: ${feeCollectorTrimmed} -Rs${transferAmount}`);
+      const feeCollectorActualName = feeCollectorIncomeRecord.name;
+      console.log(`💰 Updating fee collector income: ${feeCollectorActualName} -Rs${transferAmount}`);
       console.log(`💰 Current cashIncome: Rs${feeCollectorIncomeRecord.cashIncome || 0}`);
       console.log(`💰 After deduction should be: Rs${(feeCollectorIncomeRecord.cashIncome || 0) - transferAmount}`);
 
       const updateResult = await incomesCol.updateOne(
-        { name: { $regex: new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+        { name: feeCollectorActualName },
         {
           $inc: {
             cashIncome: -transferAmount  // Sirf cash se cut karo
