@@ -3203,7 +3203,6 @@ app.get('/api/users/unpaid', async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const expiryDate = req.query.expiryDate; // YYYY-MM-DD format
     const unpaidDate = req.query.unpaidDate; // YYYY-MM-DD format - date user became unpaid
-    const unpaidDate = req.query.unpaidDate; // YYYY-MM-DD format - date user became unpaid
     const rechargeDate = req.query.rechargeDate; // YYYY-MM-DD format - for filtering by recharge date
     const updatedDate = req.query.updatedDate; // YYYY-MM-DD - filter by voucher update time
     const feeCollector = req.query.feeCollector; // Fee collector name filter
@@ -3307,7 +3306,14 @@ app.get('/api/users/unpaid', async (req, res) => {
         updatedAt: { $gte: startOfDay, $lte: endOfDay }
       }).project({ userId: 1 }).toArray();
 
-      const userIds = vouchersUpdated.map(v => new ObjectId(v.userId));
+      const userIds = vouchersUpdated.map(v => {
+        try {
+          return new ObjectId(v.userId);
+        } catch (e) {
+          console.error(`⚠️ Invalid userId in voucher: ${v.userId}`);
+          return null;
+        }
+      }).filter(id => id !== null);
 
       if (userIds.length > 0) {
         query.$and.push({ _id: { $in: userIds } });
