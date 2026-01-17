@@ -3203,7 +3203,9 @@ app.get('/api/users/unpaid', async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const expiryDate = req.query.expiryDate; // YYYY-MM-DD format
     const unpaidDate = req.query.unpaidDate; // YYYY-MM-DD format - date user became unpaid
+    const unpaidDate = req.query.unpaidDate; // YYYY-MM-DD format - date user became unpaid
     const rechargeDate = req.query.rechargeDate; // YYYY-MM-DD format - for filtering by recharge date
+    const updatedDate = req.query.updatedDate; // YYYY-MM-DD - filter by voucher update time
     const feeCollector = req.query.feeCollector; // Fee collector name filter
     const assignTo = req.query.assignTo; // Technician assignment filter
     const search = req.query.search; // Search by name, phone, userId
@@ -3287,6 +3289,35 @@ app.get('/api/users/unpaid', async (req, res) => {
     }
 
 
+
+    // If updatedDate filter is provided, match users whose vouchers were updated on that day
+    if (updatedDate) {
+      console.log(`📅 Updated Date filter: ${updatedDate}`);
+
+      // Calculate start and end of the day in PKT (UTC+5)
+      // Since server might not be in PKT, we construct dates carefully
+      // We assume updatedDate string is YYYY-MM-DD
+      const startOfDay = new Date(`${updatedDate}T00:00:00+05:00`);
+      const endOfDay = new Date(`${updatedDate}T23:59:59.999+05:00`);
+
+      console.log(`📅 Querying vouchers updated between ${startOfDay.toISOString()} and ${endOfDay.toISOString()}`);
+
+      // Find vouchers updated in this range
+      const vouchersUpdated = await vouchersCollection.find({
+        updatedAt: { $gte: startOfDay, $lte: endOfDay }
+      }).project({ userId: 1 }).toArray();
+
+      const userIds = vouchersUpdated.map(v => new ObjectId(v.userId));
+
+      if (userIds.length > 0) {
+        query.$and.push({ _id: { $in: userIds } });
+        console.log(`🔍 Found ${userIds.length} users updated on ${updatedDate}`);
+      } else {
+        // No updates found - force empty result
+        query.$and.push({ _id: { $in: [] } });
+        console.log(`🔍 No users found updated on ${updatedDate}`);
+      }
+    }
 
     // If rechargeDate filter is provided, match users with this recharge date
     if (rechargeDate) {
@@ -3657,6 +3688,7 @@ app.get('/api/balances', async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const expiryDate = req.query.expiryDate; // YYYY-MM-DD format
+    const updatedDate = req.query.updatedDate; // YYYY-MM-DD - filter by voucher update time
     const feeCollector = req.query.feeCollector; // Fee collector name filter
     const assignTo = req.query.assignTo; // Technician assignment filter
     const search = req.query.search; // Search by name, phone, userId
@@ -3703,6 +3735,33 @@ app.get('/api/balances', async (req, res) => {
     };
 
     console.log(`📊 Balance query: Fetching users with status='partial' OR 'superbalance'`);
+
+    // If updatedDate filter is provided, match users whose vouchers were updated on that day
+    if (updatedDate) {
+      console.log(`📅 Updated Date filter: ${updatedDate}`);
+
+      // Calculate start and end of the day in PKT (UTC+5)
+      const startOfDay = new Date(`${updatedDate}T00:00:00+05:00`);
+      const endOfDay = new Date(`${updatedDate}T23:59:59.999+05:00`);
+
+      console.log(`📅 Querying vouchers updated between ${startOfDay.toISOString()} and ${endOfDay.toISOString()}`);
+
+      // Find vouchers updated in this range
+      const vouchersUpdated = await vouchersCollection.find({
+        updatedAt: { $gte: startOfDay, $lte: endOfDay }
+      }).project({ userId: 1 }).toArray();
+
+      const userIds = vouchersUpdated.map(v => new ObjectId(v.userId));
+
+      if (userIds.length > 0) {
+        query.$and.push({ _id: { $in: userIds } });
+        console.log(`🔍 Found ${userIds.length} users updated on ${updatedDate}`);
+      } else {
+        // No updates found - force empty result
+        query.$and.push({ _id: { $in: [] } });
+        console.log(`🔍 No users found updated on ${updatedDate}`);
+      }
+    }
 
     // STRICT: Filter by fee collector if provided (case-insensitive) - ALWAYS apply
     if (feeCollector) {
