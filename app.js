@@ -3208,6 +3208,7 @@ app.get('/api/users/unpaid', async (req, res) => {
     const feeCollector = req.query.feeCollector; // Fee collector name filter
     const assignTo = req.query.assignTo; // Technician assignment filter
     const search = req.query.search; // Search by name, phone, userId
+    const alphabet = req.query.alphabet; // A-Z filter letter
 
     // CRITICAL: Query users directly by status='unpaid' or 'partial'
     // This includes Pay Later users with future expiry dates immediately
@@ -3270,9 +3271,15 @@ app.get('/api/users/unpaid', async (req, res) => {
     }
 
     // Search filter - search by userName, simNo, whatsappNo, userId, streetName
-    if (search) {
-      const searchTrimmed = search.trim();
-      if (searchTrimmed) {
+    if (search || alphabet) {
+      const searchTrimmed = (search || '').trim();
+      const alphabetLetter = (alphabet || '').trim();
+
+      if (alphabetLetter) {
+        const alphabetRegex = new RegExp(`^${alphabetLetter}`, 'i');
+        query.$and.push({ userName: alphabetRegex });
+        console.log(`🔤 Filtering unpaid users by alphabet: "${alphabetLetter}"`);
+      } else if (searchTrimmed) {
         const searchRegex = new RegExp(searchTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
         query.$and.push({
           $or: [
@@ -3698,6 +3705,7 @@ app.get('/api/balances', async (req, res) => {
     const feeCollector = req.query.feeCollector; // Fee collector name filter
     const assignTo = req.query.assignTo; // Technician assignment filter
     const search = req.query.search; // Search by name, phone, userId
+    const alphabet = req.query.alphabet; // A-Z filter letter
 
     // 🔍 Find users who have at least one 'partial' (balanced) month in their vouchers
     // This allows show them in Balance list even if their overall status is 'unpaid'
@@ -3788,9 +3796,15 @@ app.get('/api/balances', async (req, res) => {
     }
 
     // Search filter - search by userName, simNo, whatsappNo, userId, streetName
-    if (search) {
-      const searchTrimmed = search.trim();
-      if (searchTrimmed) {
+    if (search || alphabet) {
+      const searchTrimmed = (search || '').trim();
+      const alphabetLetter = (alphabet || '').trim();
+
+      if (alphabetLetter) {
+        const alphabetRegex = new RegExp(`^${alphabetLetter}`, 'i');
+        query.$and.push({ userName: alphabetRegex });
+        console.log(`🔤 Filtering balance users by alphabet: "${alphabetLetter}"`);
+      } else if (searchTrimmed) {
         const searchRegex = new RegExp(searchTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
         query.$and.push({
           $or: [
