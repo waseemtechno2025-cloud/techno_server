@@ -7270,16 +7270,21 @@ app.post('/api/vouchers/convert-to-unpaid', ensureDbConnection, async (req, res)
     const packageFee = newPackageFee !== undefined ? Number(newPackageFee) : Number(monthData.packageFee || 0);
     const discount = newDiscount !== undefined ? Number(newDiscount) : Number(monthData.discount || 0);
 
-    const fullAmount = packageFee - discount;
+    // Check if this is a package update or actual reversal
+    const isPackageUpdate = newPackageFee !== undefined;
     const refundedAmount = Number(monthData.paidAmount || 0);
     const receivedBy = monthData.receivedBy || '';
     const paymentMethod = monthData.paymentMethod || 'Cash';
 
-    console.log(`💰 Reversing payment - Amount: Rs ${refundedAmount}, ReceivedBy: ${receivedBy}, Method: ${paymentMethod}`);
-    if (newPackageFee !== undefined) console.log(`   📝 Updating package: Rs ${packageFee} (was ${monthData.packageFee})`);
+    console.log(`💰 Operation type: ${isPackageUpdate ? 'Package Update' : 'Reversal'}`);
+    if (isPackageUpdate) {
+      console.log(`   📝 Updating package: Rs ${packageFee} (was ${monthData.packageFee})`);
+    } else {
+      console.log(`💰 Reversing payment - Amount: Rs ${refundedAmount}, ReceivedBy: ${receivedBy}, Method: ${paymentMethod}`);
+    }
 
-    // CRITICAL: Deduct from receiver's income if amount was paid
-    if (refundedAmount > 0 && receivedBy) {
+    // CRITICAL: Only deduct from income if this is an actual reversal (not just package update)
+    if (!isPackageUpdate && refundedAmount > 0 && receivedBy) {
       try {
         // Determine which income field to deduct from based on payment method
         const isBankTransfer = paymentMethod.toLowerCase().includes('bank');
@@ -7314,9 +7319,13 @@ app.post('/api/vouchers/convert-to-unpaid', ensureDbConnection, async (req, res)
       }
     }
 
+    const fullAmount = packageFee - discount;
+
     // Update month: convert to unpaid, clear payment history, update package fee/discount
     const updatedMonths = [...voucher.months];
-    updatedMonths[monthIndex] = {
+
+    // Build updated month object
+    const updatedMonth = {
       ...monthData,
       status: 'unpaid',
       packageFee: packageFee,
@@ -7325,10 +7334,17 @@ app.post('/api/vouchers/convert-to-unpaid', ensureDbConnection, async (req, res)
       remainingAmount: fullAmount,
       paymentMethod: '',
       receivedBy: '',
-      paymentHistory: [],
-      refundDate: new Date(),
-      refundedAmount: refundedAmount
+      paymentHistory: []
     };
+
+    // CRITICAL: Only set refund fields if this is an actual reversal (not package update)
+    // This prevents package updates from marking months as "reversed"
+    if (!isPackageUpdate) {
+      updatedMonth.refundDate = new Date();
+      updatedMonth.refundedAmount = refundedAmount;
+    }
+
+    updatedMonths[monthIndex] = updatedMonth;
 
     // Update voucher
     await vouchersCollection.updateOne(
