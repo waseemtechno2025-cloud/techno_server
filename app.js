@@ -3253,20 +3253,34 @@ app.get('/api/users/unpaid', async (req, res) => {
     };
 
     // STRICT: Filter by fee collector if provided (case-insensitive) - ALWAYS apply
-    if (feeCollector) {
-      const feeCollectorTrimmed = feeCollector.trim();
-      if (feeCollectorTrimmed) {
-        query.$and.push({ feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') } });
-        console.log(`🔒 STRICT: Filtering /api/users/unpaid by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
+    // EMPLOYEE FILTER FIX: If both feeCollector and assignTo have the same value,
+    // use OR logic instead of AND to find users assigned through either field
+    if (feeCollector && assignTo && feeCollector.trim() === assignTo.trim()) {
+      const employeeName = feeCollector.trim();
+      query.$and.push({
+        $or: [
+          { feeCollector: { $regex: new RegExp(`^${employeeName}$`, 'i') } },
+          { assignTo: { $regex: new RegExp(`^${employeeName}$`, 'i') } }
+        ]
+      });
+      console.log(`🔒 EMPLOYEE FILTER: Searching for users with feeCollector OR assignTo = "${employeeName}"`);
+    } else {
+      // Normal separate filtering
+      if (feeCollector) {
+        const feeCollectorTrimmed = feeCollector.trim();
+        if (feeCollectorTrimmed) {
+          query.$and.push({ feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') } });
+          console.log(`🔒 STRICT: Filtering /api/users/unpaid by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
+        }
       }
-    }
 
-    // STRICT: Filter by assignTo (technician) if provided (case-insensitive) - ALWAYS apply
-    if (assignTo) {
-      const assignToTrimmed = assignTo.trim();
-      if (assignToTrimmed) {
-        query.$and.push({ assignTo: { $regex: new RegExp(`^${assignToTrimmed}$`, 'i') } });
-        console.log(`🔒 STRICT: Filtering /api/users/unpaid by assignTo (technician, case-insensitive): ${assignToTrimmed}`);
+      // STRICT: Filter by assignTo (technician) if provided (case-insensitive) - ALWAYS apply
+      if (assignTo) {
+        const assignToTrimmed = assignTo.trim();
+        if (assignToTrimmed) {
+          query.$and.push({ assignTo: { $regex: new RegExp(`^${assignToTrimmed}$`, 'i') } });
+          console.log(`🔒 STRICT: Filtering /api/users/unpaid by assignTo (technician, case-insensitive): ${assignToTrimmed}`);
+        }
       }
     }
 
@@ -3778,20 +3792,34 @@ app.get('/api/balances', async (req, res) => {
     }
 
     // STRICT: Filter by fee collector if provided (case-insensitive) - ALWAYS apply
-    if (feeCollector) {
-      const feeCollectorTrimmed = feeCollector.trim();
-      if (feeCollectorTrimmed) {
-        query.$and.push({ feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') } });
-        console.log(`🔒 STRICT: Filtering /api/balances by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
+    // EMPLOYEE FILTER FIX: If both feeCollector and assignTo have the same value,
+    // use OR logic instead of AND to find users assigned through either field
+    if (feeCollector && assignTo && feeCollector.trim() === assignTo.trim()) {
+      const employeeName = feeCollector.trim();
+      query.$and.push({
+        $or: [
+          { feeCollector: { $regex: new RegExp(`^${employeeName}$`, 'i') } },
+          { assignTo: { $regex: new RegExp(`^${employeeName}$`, 'i') } }
+        ]
+      });
+      console.log(`🔒 EMPLOYEE FILTER: Searching for balance users with feeCollector OR assignTo = "${employeeName}"`);
+    } else {
+      // Normal separate filtering
+      if (feeCollector) {
+        const feeCollectorTrimmed = feeCollector.trim();
+        if (feeCollectorTrimmed) {
+          query.$and.push({ feeCollector: { $regex: new RegExp(`^${feeCollectorTrimmed}$`, 'i') } });
+          console.log(`🔒 STRICT: Filtering /api/balances by fee collector (case-insensitive): ${feeCollectorTrimmed}`);
+        }
       }
-    }
 
-    // STRICT: Filter by assignTo (technician) if provided (case-insensitive) - ALWAYS apply
-    if (assignTo) {
-      const assignToTrimmed = assignTo.trim();
-      if (assignToTrimmed) {
-        query.$and.push({ assignTo: { $regex: new RegExp(`^${assignToTrimmed}$`, 'i') } });
-        console.log(`🔒 STRICT: Filtering /api/balances by assignTo (technician, case-insensitive): ${assignToTrimmed}`);
+      // STRICT: Filter by assignTo (technician) if provided (case-insensitive) - ALWAYS apply
+      if (assignTo) {
+        const assignToTrimmed = assignTo.trim();
+        if (assignToTrimmed) {
+          query.$and.push({ assignTo: { $regex: new RegExp(`^${assignToTrimmed}$`, 'i') } });
+          console.log(`🔒 STRICT: Filtering /api/balances by assignTo (technician, case-insensitive): ${assignToTrimmed}`);
+        }
       }
     }
 
