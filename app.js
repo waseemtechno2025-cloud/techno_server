@@ -2912,16 +2912,10 @@ app.get('/api/users/paid', async (req, res) => {
       console.log(`📋 Users with payments received by ${feeCollectorTrimmed}: ${usersWithPaidMonths.length}`);
     }
 
-    // STRICT: Filter by assignTo (technician) if provided (case-insensitive)
-    // ONLY apply if it differs from feeCollector, because feeCollector logic already handles assigned users inclusive of payments
-    // If we apply strict assignTo filter when it equals feeCollector, we hide payments collected by feeCollector from users assigned to others
+    // STRICT: Filter by assignTo (technician) if provided (case-insensitive) - ALWAYS apply
     if (assignTo) {
       const assignToTrimmed = assignTo.trim();
-      const feeCollectorTrimmed = feeCollector ? feeCollector.trim() : null;
-
-      if (feeCollectorTrimmed && assignToTrimmed.toLowerCase() === feeCollectorTrimmed.toLowerCase()) {
-        console.log(`🔒 OPTIMIZATION: Skipping strict assignTo filter because it matches feeCollector (${assignToTrimmed}). Logic allows viewing collections from non-assigned users.`);
-      } else if (assignToTrimmed) {
+      if (assignToTrimmed) {
         query.$and.push({ assignTo: { $regex: new RegExp(`^${assignToTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } });
         console.log(`🔒 STRICT: Filtering /api/users/paid by assignTo (technician, case-insensitive): ${assignToTrimmed}`);
       }
