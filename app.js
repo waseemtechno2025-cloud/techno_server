@@ -1844,12 +1844,12 @@ app.get('/api/dashboard/stats', async (req, res) => {
 
         // Check for unpaid months
         const hasUnpaidMonth = voucher.months.some(m =>
-          m.status === 'unpaid' && !m.refundDate && !m.refundedAmount
+          m.status === 'unpaid'
         );
 
         // Check for partial months (with remaining amount > 0)
         const hasPartialMonth = voucher.months.some(m =>
-          m.status === 'partial' && !m.refundDate && !m.refundedAmount && (m.remainingAmount || 0) > 0
+          m.status === 'partial' && (m.remainingAmount || 0) > 0
         );
 
         if (voucher.userId) {
@@ -3545,7 +3545,7 @@ app.get('/api/users/unpaid', async (req, res) => {
       if (voucher && Array.isArray(voucher.months)) {
         // Extract unpaid months (outstandingMonths)
         const outstandingMonths = voucher.months
-          .filter(m => m.status === 'unpaid' && !m.refundDate && !m.refundedAmount)
+          .filter(m => m.status === 'unpaid')
           .map(m => m.month || m.name);
 
         // Extract pending months
@@ -3555,7 +3555,7 @@ app.get('/api/users/unpaid', async (req, res) => {
 
         // Extract partial months (for balance calculation)
         const partialMonths = voucher.months
-          .filter(m => m.status === 'partial' && !m.refundDate && !m.refundedAmount)
+          .filter(m => m.status === 'partial')
           .map(m => ({
             month: m.month || m.name,
             remainingAmount: m.remainingAmount || 0
@@ -9485,8 +9485,9 @@ app.post('/api/users/:id/recalculate-status', async (req, res) => {
     for (const v of userVouchers) {
       if (Array.isArray(v.months)) {
         for (const m of v.months) {
-          const isReversed = !!(m.refundDate || m.refundedAmount);
-          if (isReversed) continue;
+          // Don't skip reversed months - rely on status
+          // const isReversed = !!(m.refundDate || m.refundedAmount);
+          // if (isReversed) continue;
 
           if (m.status === 'unpaid') {
             hasUnpaidMonth = true;
@@ -9502,8 +9503,9 @@ app.post('/api/users/:id/recalculate-status', async (req, res) => {
           totalRemaining += monthRemaining;
         }
       } else {
-        const isReversed = !!(v.refundDate || v.refundedAmount);
-        if (isReversed) continue;
+        // Don't skip reversed vouchers - rely on status
+        // const isReversed = !!(v.refundDate || v.refundedAmount);
+        // if (isReversed) continue;
 
         if (v.status === 'unpaid') {
           hasUnpaidMonth = true;
