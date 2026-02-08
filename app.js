@@ -5728,7 +5728,7 @@ const moveTodayExpiredToUnpaid = async () => {
       if (!exp) return null;
       if (exp instanceof Date) return toPKT_YMD(exp);
       if (typeof exp === 'string') {
-        const parts = exp.split('-');
+        const parts = exp.split(/[-\/]/);
         if (parts.length === 3) {
           const [dd, mm, yyyy] = parts;
           const d = parseInt(dd, 10);
