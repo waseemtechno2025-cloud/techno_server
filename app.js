@@ -7506,6 +7506,104 @@ app.delete('/api/vouchers/:id', ensureDbConnection, async (req, res) => {
   }
 });
 
+// Generate next month's voucher manually
+app.post('/api/vouchers/generate-next', ensureDbConnection, async (req, res) => {
+  try {
+    const { userId, expiryDate } = req.body;
+    if (!userId || !expiryDate) return res.status(400).json({ success: false, message: 'Missing userId or expiryDate' });
+
+    const usersCollection = db.collection('users');
+    const vouchersCollection = db.collection('vouchers');
+
+    const user = await usersCollection.findOne({ _id: new ObjectId(userId) });
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    const voucher = await vouchersCollection.findOne({ userId });
+
+    // Determine next month
+    let nextMonthName = "";
+    if (voucher && voucher.months && voucher.months.length > 0) {
+      // Get last month
+      const lastMonth = voucher.months[voucher.months.length - 1];
+      const lastMonthName = lastMonth.month; // "January 2026"
+
+      const parts = lastMonthName.split(' ');
+      if (parts.length >= 2) {
+        const mStr = parts[0];
+        const yStr = parts[1];
+        const date = new Date(`${mStr} 1, ${yStr}`);
+        if (!isNaN(date.getTime())) {
+          date.setMonth(date.getMonth() + 1); // Next month
+          nextMonthName = date.toLocaleString('default', { month: 'long', year: 'numeric' });
+        }
+      }
+    }
+
+    if (!nextMonthName) {
+      // Fallback: Current Month
+      const now = new Date();
+      nextMonthName = now.toLocaleString('default', { month: 'long', year: 'numeric' });
+    }
+
+    // Check if next month already exists (to prevent duplicates)
+    if (voucher && voucher.months.some(m => m.month === nextMonthName)) {
+      return res.status(400).json({ success: false, message: `Voucher for ${nextMonthName} already exists` });
+    }
+
+    // Create new month object
+    const pkgFee = Number(user.amount || 0);
+    const disc = Number(user.discount || 0);
+    const newMonth = {
+      month: nextMonthName,
+      packageFee: pkgFee,
+      discount: disc,
+      paidAmount: 0,
+      remainingAmount: pkgFee - disc,
+      status: 'unpaid',
+      description: `${nextMonthName} - Generated Manually`,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      paymentHistory: []
+    };
+
+    if (voucher) {
+      await vouchersCollection.updateOne(
+        { _id: voucher._id },
+        { $push: { months: newMonth } }
+      );
+    } else {
+      // Create new voucher
+      await vouchersCollection.insertOne({
+        userId,
+        userName: user.userName,
+        months: [newMonth],
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+    }
+
+    // Update User Expiry and Status
+    await usersCollection.updateOne(
+      { _id: new ObjectId(userId) },
+      {
+        $set: {
+          expiryDate: expiryDate, // "YYYY-MM-DD" or similar string
+          status: 'unpaid',
+          lastActivity: new Date()
+        }
+      }
+    );
+
+    console.log(`✅ Generated next voucher for user ${user.userName}: ${nextMonthName}, Expiry: ${expiryDate}`);
+
+    res.json({ success: true, message: `Generated voucher for ${nextMonthName}`, nextMonth: nextMonthName });
+
+  } catch (error) {
+    console.error('Error generating next voucher:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // ============ TRANSACTIONS ROUTES ============
 // Get all transactions
 app.get('/api/transactions', ensureDbConnection, async (req, res) => {
