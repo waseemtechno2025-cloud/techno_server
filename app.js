@@ -634,7 +634,8 @@ app.put('/api/users/:id', async (req, res) => {
       status,
       serviceStatus,
       paidAmount,
-      remainingAmount
+      remainingAmount,
+      currentFee
     } = req.body;
 
     // Build update object dynamically
@@ -660,6 +661,7 @@ app.put('/api/users/:id', async (req, res) => {
     if (serviceStatus !== undefined) updateFields.serviceStatus = serviceStatus;
     if (paidAmount !== undefined) updateFields.paidAmount = paidAmount || 0;
     if (remainingAmount !== undefined) updateFields.remainingAmount = remainingAmount || 0;
+    if (currentFee !== undefined) updateFields.currentFee = currentFee || 0;
 
     // If status is being changed, manage unpaidSince timestamp
     if (status !== undefined) {
