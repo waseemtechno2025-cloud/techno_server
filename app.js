@@ -4008,6 +4008,34 @@ app.get('/api/users/expiring-soon', async (req, res) => {
       }
     }
 
+    // Implement search filter (DB-side)
+    const search = req.query.search;
+    if (search) {
+      const searchRegex = new RegExp(search.trim(), 'i');
+      const searchFilter = {
+        $or: [
+          { userName: searchRegex },
+          { userId: searchRegex },
+          { simNo: searchRegex },
+          { streetName: searchRegex }
+        ]
+      };
+
+      // Since the query already has an $or for serviceStatus, wrap both in $and
+      if (query.$or) {
+        const existingOr = query.$or;
+        delete query.$or;
+        query.$and = [
+          { $or: existingOr },
+          searchFilter
+        ];
+      } else {
+        query.$and = query.$and || [];
+        query.$and.push(searchFilter);
+      }
+      console.log(`🔍 DB Search: Filtering expiring users for: "${search}"`);
+    }
+
     const usersAll = await usersCollection.find(query).toArray();
 
     // Helper: parse expiryDate to PKT Y/M/D (supports DD-MM-YYYY and DD/MM/YYYY, and ISO fallback)
