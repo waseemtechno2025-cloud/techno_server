@@ -7389,12 +7389,9 @@ app.post('/api/vouchers/convert-to-unpaid', ensureDbConnection, async (req, res)
       paymentHistory: []
     };
 
-    // CRITICAL: Only set refund fields if this is an actual reversal (not package update)
-    // This prevents package updates from marking months as "reversed"
-    if (!isPackageUpdate) {
-      updatedMonth.refundDate = new Date();
-      updatedMonth.refundedAmount = refundedAmount;
-    }
+    // Remove refund fields so it looks like a fresh unpaid month
+    delete updatedMonth.refundDate;
+    delete updatedMonth.refundedAmount;
 
     updatedMonths[monthIndex] = updatedMonth;
 
@@ -7447,7 +7444,8 @@ app.post('/api/vouchers/convert-to-unpaid', ensureDbConnection, async (req, res)
           status: newStatus,
           paymentStatus: newStatus,
           paidAmount: totalPaid,
-          remainingAmount: totalRemaining
+          remainingAmount: totalRemaining,
+          currentFee: 0 // Reset current payment amount on reversal
         }
       }
     );
