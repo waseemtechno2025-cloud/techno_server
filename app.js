@@ -4536,29 +4536,28 @@ app.put('/api/transactions/expense/:id', ensureDbConnection, async (req, res) =>
       { returnDocument: 'after' }
     );
 
-    if (!result.value) {
+    if (!result) {
       return res.status(404).json({
         success: false,
         message: 'Expense not found'
       });
     }
 
-    // Attempt to update matching transaction record for consistency
     try {
       const transactionsCollection = db.collection('transactions');
       await transactionsCollection.updateOne(
         {
           type: 'expense',
-          description: result.value.description // Best effort match
+          description: result.description // Best effort match
         },
         {
           $set: {
-            amount: result.value.amount,
-            description: result.value.description,
-            category: result.value.category,
-            paidTo: result.value.paidTo,
-            paidBy: result.value.paidBy,
-            paymentDate: result.value.date
+            amount: result.amount,
+            description: result.description,
+            category: result.category,
+            paidTo: result.paidTo,
+            paidBy: result.paidBy,
+            paymentDate: result.date
           }
         }
       );
@@ -4566,12 +4565,12 @@ app.put('/api/transactions/expense/:id', ensureDbConnection, async (req, res) =>
       console.log('⚠️ Could not update transaction record for expense:', transactionError);
     }
 
-    console.log('✅ Expense updated:', result.value);
+    console.log('✅ Expense updated:', result);
 
     res.status(200).json({
       success: true,
       message: 'Expense updated successfully',
-      data: result.value
+      data: result
     });
   } catch (error) {
     console.error('❌ Error updating expense:', error);
