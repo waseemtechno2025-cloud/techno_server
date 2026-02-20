@@ -4506,6 +4506,83 @@ app.post('/api/transactions/expense', ensureDbConnection, async (req, res) => {
   }
 });
 
+// UPDATE expense by ID
+app.put('/api/transactions/expense/:id', ensureDbConnection, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { amount, description, category, paidTo, paidBy, date } = req.body;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid expense ID'
+      });
+    }
+
+    const expensesCollection = db.collection('expenses');
+
+    // Build update object
+    const updateFields = {};
+    if (amount !== undefined) updateFields.amount = parseFloat(amount);
+    if (description !== undefined) updateFields.description = description;
+    if (category !== undefined) updateFields.category = category;
+    if (paidTo !== undefined) updateFields.paidTo = paidTo;
+    if (paidBy !== undefined) updateFields.paidBy = paidBy;
+    if (date !== undefined) updateFields.date = new Date(date);
+
+    const result = await expensesCollection.findOneAndUpdate(
+      { _id: new ObjectId(id) },
+      { $set: updateFields },
+      { returnDocument: 'after' }
+    );
+
+    if (!result.value) {
+      return res.status(404).json({
+        success: false,
+        message: 'Expense not found'
+      });
+    }
+
+    // Attempt to update matching transaction record for consistency
+    try {
+      const transactionsCollection = db.collection('transactions');
+      await transactionsCollection.updateOne(
+        {
+          type: 'expense',
+          description: result.value.description // Best effort match
+        },
+        {
+          $set: {
+            amount: result.value.amount,
+            description: result.value.description,
+            category: result.value.category,
+            paidTo: result.value.paidTo,
+            paidBy: result.value.paidBy,
+            paymentDate: result.value.date
+          }
+        }
+      );
+    } catch (transactionError) {
+      console.log('⚠️ Could not update transaction record for expense:', transactionError);
+    }
+
+    console.log('✅ Expense updated:', result.value);
+
+    res.status(200).json({
+      success: true,
+      message: 'Expense updated successfully',
+      data: result.value
+    });
+  } catch (error) {
+    console.error('❌ Error updating expense:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error updating expense',
+      error: error.message
+    });
+  }
+});
+
 // DELETE expense by ID
 app.delete('/api/transactions/expense/:id', ensureDbConnection, async (req, res) => {
   try {
