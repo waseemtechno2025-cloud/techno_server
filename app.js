@@ -9086,7 +9086,7 @@ app.post('/api/incomes', ensureDbConnection, async (req, res) => {
 // POST - Update income manually (for admin to change technician income)
 app.post('/api/incomes/update', ensureDbConnection, async (req, res) => {
   try {
-    const { name, cashIncome } = req.body;
+    const { name, cashIncome, fromName } = req.body;
 
     if (!name) {
       return res.status(400).json({
@@ -9096,48 +9096,95 @@ app.post('/api/incomes/update', ensureDbConnection, async (req, res) => {
     }
 
     const incomeValue = Number(cashIncome || 0);
-    console.log(`💰 Updating income for ${name} to Rs ${incomeValue}`);
+    const sourceName = fromName ? fromName.trim() : 'Unknown';
 
     // Find existing income record
     const existingIncome = await incomesCollection.findOne({ name: name });
 
-    if (existingIncome) {
-      // Update existing record
-      await incomesCollection.updateOne(
-        { name: name },
-        {
-          $set: {
-            cashIncome: incomeValue,
-            updatedAt: new Date()
+    if (incomeValue === 0) {
+      console.log(`💰 Resetting income for ${name} to 0`);
+      if (existingIncome) {
+        await incomesCollection.updateOne(
+          { name: name },
+          {
+            $set: {
+              cashIncome: 0,
+              incomeRecords: [],
+              updatedAt: new Date()
+            }
           }
-        }
-      );
-      console.log(`✅ Updated income for ${name}`);
-    } else {
-      // Create new record
-      await incomesCollection.insertOne({
-        name: name,
-        cashIncome: incomeValue,
-        bankIncome: 0,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      });
-      console.log(`✅ Created new income record for ${name}`);
-    }
-
-    res.status(200).json({
-      success: true,
-      message: `Income updated to Rs ${incomeValue} for ${name}`,
-      data: {
-        name: name,
-        cashIncome: incomeValue
+        );
       }
-    });
+      return res.status(200).json({
+        success: true,
+        message: `Income reset for ${name}`,
+        data: { name, cashIncome: 0 }
+      });
+    } else {
+      console.log(`💰 Adding Rs ${incomeValue} to income of ${name} from ${sourceName}`);
+      const newTotal = existingIncome ? (existingIncome.cashIncome || 0) + incomeValue : incomeValue;
+      const newRecord = { fromName: sourceName, amount: incomeValue, date: new Date() };
+
+      if (existingIncome) {
+        await incomesCollection.updateOne(
+          { name: name },
+          {
+            $set: {
+              cashIncome: newTotal,
+              updatedAt: new Date()
+            },
+            $push: { incomeRecords: newRecord }
+          }
+        );
+      } else {
+        await incomesCollection.insertOne({
+          name: name,
+          cashIncome: newTotal,
+          bankIncome: 0,
+          incomeRecords: [newRecord],
+          createdAt: new Date(),
+          updatedAt: new Date()
+        });
+      }
+      return res.status(200).json({
+        success: true,
+        message: `Added Rs ${incomeValue} to ${name}`,
+        data: { name, cashIncome: newTotal }
+      });
+    }
   } catch (error) {
     console.error('❌ Error updating income:', error);
     res.status(500).json({
       success: false,
       message: 'Error updating income',
+      error: error.message
+    });
+  }
+});
+
+// GET - Get income history for a specific employee
+app.get('/api/incomes/history/:name', ensureDbConnection, async (req, res) => {
+  try {
+    const name = req.params.name;
+    // Handle URL encoded names and case insensitivity
+    const existingIncome = await incomesCollection.findOne({ name: { $regex: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } });
+
+    if (!existingIncome) {
+      return res.status(200).json({
+        success: true,
+        data: { name: name, cashIncome: 0, bankIncome: 0, incomeRecords: [] }
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: existingIncome
+    });
+  } catch (error) {
+    console.error('❌ Error fetching employee income:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching income',
       error: error.message
     });
   }
