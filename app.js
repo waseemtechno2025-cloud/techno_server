@@ -9190,6 +9190,49 @@ app.get('/api/incomes/history/:name', ensureDbConnection, async (req, res) => {
   }
 });
 
+// DELETE - Delete a specific income record and deduct amount from total
+app.post('/api/incomes/delete-record', ensureDbConnection, async (req, res) => {
+  try {
+    const { name, recordIndex } = req.body;
+
+    if (!name || recordIndex === undefined) {
+      return res.status(400).json({ success: false, message: 'Name and recordIndex are required' });
+    }
+
+    const existingIncome = await incomesCollection.findOne({ name: name });
+
+    if (!existingIncome || !existingIncome.incomeRecords || !existingIncome.incomeRecords[recordIndex]) {
+      return res.status(404).json({ success: false, message: 'Record not found' });
+    }
+
+    const amountToDeduct = Number(existingIncome.incomeRecords[recordIndex].amount || 0);
+    const updatedRecords = [...existingIncome.incomeRecords];
+    updatedRecords.splice(recordIndex, 1);
+
+    const updatedTotal = Math.max(0, (existingIncome.cashIncome || 0) - amountToDeduct);
+
+    await incomesCollection.updateOne(
+      { name: name },
+      {
+        $set: {
+          cashIncome: updatedTotal,
+          incomeRecords: updatedRecords,
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Record deleted and income updated',
+      data: { cashIncome: updatedTotal }
+    });
+  } catch (error) {
+    console.error('❌ Error deleting income record:', error);
+    res.status(500).json({ success: false, message: 'Error deleting record' });
+  }
+});
+
 // POST - Sync incomes from existing vouchers (one-time initialization)
 app.post('/api/incomes/sync', ensureDbConnection, async (req, res) => {
   try {
