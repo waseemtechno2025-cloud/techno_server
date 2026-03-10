@@ -31,6 +31,7 @@ let monthlySalesCollection;
 let complaintsCollection;
 let notificationsCollection;
 let incomesCollection;
+let loansCollection;
 let isConnected = false;
 let client;
 
@@ -77,6 +78,7 @@ async function connectToDatabase() {
     complaintsCollection = db.collection('complaints');
     notificationsCollection = db.collection('notifications');
     incomesCollection = db.collection('incomes');
+    loansCollection = db.collection('loans');
 
     console.log('Collections initialized:', {
       streets: !!streetsCollection,
@@ -93,7 +95,8 @@ async function connectToDatabase() {
       monthlySales: !!monthlySalesCollection,
       complaints: !!complaintsCollection,
       notifications: !!notificationsCollection,
-      incomes: !!incomesCollection
+      incomes: !!incomesCollection,
+      loans: !!loansCollection
     });
 
     // Create unique index on name field
@@ -9353,6 +9356,93 @@ app.post('/api/incomes/sync', ensureDbConnection, async (req, res) => {
       message: 'Error syncing incomes',
       error: error.message
     });
+  }
+});
+
+// Loan API Routes
+// GET - Fetch all loans
+app.get('/api/loans', ensureDbConnection, async (req, res) => {
+  try {
+    const loans = await loansCollection.find({}).sort({ date: -1 }).toArray();
+
+    // Calculate totals
+    const totalTaken = loans
+      .filter(l => l.type === 'taken')
+      .reduce((sum, l) => sum + (Number(l.amount) || 0), 0);
+
+    const totalGiven = loans
+      .filter(l => l.type === 'given')
+      .reduce((sum, l) => sum + (Number(l.amount) || 0), 0);
+
+    res.status(200).json({
+      success: true,
+      data: loans,
+      totals: {
+        taken: totalTaken,
+        given: totalGiven,
+        net: totalTaken - totalGiven
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error fetching loans:', error);
+    res.status(500).json({ success: false, message: 'Error fetching loans' });
+  }
+});
+
+// POST - Add or update a loan
+app.post('/api/loans', ensureDbConnection, async (req, res) => {
+  try {
+    const { id, type, person, amount, description, date } = req.body;
+
+    if (!type || !person || !amount) {
+      return res.status(400).json({ success: false, message: 'Type, person and amount are required' });
+    }
+
+    const loanData = {
+      type, // 'taken' or 'given'
+      person,
+      amount: Number(amount),
+      description: description || '',
+      date: date ? new Date(date) : new Date(),
+      updatedAt: new Date()
+    };
+
+    if (id) {
+      // Update existing
+      const { ObjectId } = require('mongodb');
+      await loansCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: loanData }
+      );
+      res.status(200).json({ success: true, message: 'Loan updated successfully' });
+    } else {
+      // Add new
+      loanData.createdAt = new Date();
+      await loansCollection.insertOne(loanData);
+      res.status(201).json({ success: true, message: 'Loan added successfully' });
+    }
+  } catch (error) {
+    console.error('❌ Error saving loan:', error);
+    res.status(500).json({ success: false, message: 'Error saving loan' });
+  }
+});
+
+// DELETE - Remove a loan
+app.delete('/api/loans/:id', ensureDbConnection, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { ObjectId } = require('mongodb');
+
+    const result = await loansCollection.deleteOne({ _id: new ObjectId(id) });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ success: false, message: 'Loan not found' });
+    }
+
+    res.status(200).json({ success: true, message: 'Loan deleted successfully' });
+  } catch (error) {
+    console.error('❌ Error deleting loan:', error);
+    res.status(500).json({ success: false, message: 'Error deleting loan' });
   }
 });
 
