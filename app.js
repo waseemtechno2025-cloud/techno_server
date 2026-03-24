@@ -177,6 +177,113 @@ app.get('/', (req, res) => {
 });
 
 
+// LOAN MANAGEMENT ENDPOINTS
+app.post('/api/loans', ensureDbConnection, async (req, res) => {
+  try {
+    const { type, personName, amount, description, date } = req.body;
+    if (!type || !personName || !amount) {
+      return res.status(400).json({ success: false, message: 'Missing required fields' });
+    }
+
+    const loanRecord = {
+      type, // 'given' or 'taken'
+      personName,
+      amount: parseFloat(amount),
+      description: description || '',
+      date: date ? new Date(date) : new Date(),
+      createdAt: new Date()
+    };
+
+    const result = await loansCollection.insertOne(loanRecord);
+    res.status(201).json({ success: true, data: { _id: result.insertedId, ...loanRecord } });
+  } catch (error) {
+    console.error('Error adding loan:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+app.get('/api/loans', ensureDbConnection, async (req, res) => {
+  try {
+    const loans = await loansCollection.find({}).sort({ date: -1 }).toArray();
+    res.status(200).json({ success: true, data: loans });
+  } catch (error) {
+    console.error('Error fetching loans:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+app.get('/api/loans/stats', ensureDbConnection, async (req, res) => {
+  try {
+    const loans = await loansCollection.find({}).toArray();
+    let totalGiven = 0;
+    let totalTaken = 0;
+
+    loans.forEach(loan => {
+      if (loan.type === 'given') totalGiven += loan.amount;
+      else if (loan.type === 'taken') totalTaken += loan.amount;
+    });
+
+    res.status(200).json({
+      success: true,
+      data: { totalGiven, totalTaken, netBalance: totalTaken - totalGiven }
+    });
+  } catch (error) {
+    console.error('Error fetching loan stats:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+app.delete('/api/loans/:id', ensureDbConnection, async (req, res) => {
+  try {
+    const result = await loansCollection.deleteOne({ _id: new ObjectId(req.params.id) });
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ success: false, message: 'Loan record not found' });
+    }
+    res.status(200).json({ success: true, message: 'Loan record deleted' });
+  } catch (error) {
+    console.error('Error deleting loan:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
+// POST /api/auth/login
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    console.log(`🔐 Login attempt: ${username}`);
+
+    if (!username || !password) {
+      return res.status(400).json({ success: false, message: 'Username and password required' });
+    }
+
+    // Default admin login
+    if (username.toLowerCase() === 'admin' && password === 'admin123') {
+      return res.status(200).json({
+        success: true,
+        user: { name: 'Admin', role: 'admin' }
+      });
+    }
+
+    // Check employees collection for fee collectors or technicians
+    const employee = await db.collection('employees').findOne({
+      name: { $regex: new RegExp(`^${username.trim()}$`, 'i') }
+    });
+
+    // Check passwords (in a real app, use hashing!)
+    if (employee && employee.password === password) {
+      return res.status(200).json({
+        success: true,
+        user: { name: employee.name, role: employee.role || 'employee' }
+      });
+    }
+
+    return res.status(401).json({ success: false, message: 'Invalid credentials' });
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ success: false, message: 'Internal server error during login' });
+  }
+});
+
 app.get('/api/delteincomes', async (req, res) => {
   try {
     // Fetch all incomes
@@ -405,7 +512,7 @@ app.post('/api/users', async (req, res) => {
 
     const parseExpiryDate = (expStr) => {
       if (!expStr) return null;
-      const parts = String(expStr).split('-');
+      const parts = String(expStr).split(/[-\/]/);
       if (parts.length === 3) {
         const d = parseInt(parts[0], 10);
         const m = parseInt(parts[1], 10) - 1;
@@ -706,7 +813,7 @@ app.put('/api/users/:id', async (req, res) => {
       // Parse expiry date
       const parseExpiryDate = (expStr) => {
         if (!expStr) return null;
-        const parts = String(expStr).split('-');
+        const parts = String(expStr).split(/[-\/]/);
         if (parts.length === 3) {
           const d = parseInt(parts[0], 10);
           const m = parseInt(parts[1], 10) - 1;
@@ -3375,136 +3482,144 @@ app.get('/api/users/unpaid', async (req, res) => {
 
     // If rechargeDate filter is provided, match users with this recharge date
     if (rechargeDate) {
-      const [year, month, day] = rechargeDate.split('-');
-      const dateWithHyphen = `${day}-${month}-${year}`;
-      const dateWithSlash = `${day}/${month}/${year}`;
-      const isoFormat = rechargeDate; // YYYY-MM-DD
-      console.log(`📅 Recharge Date filter: ${rechargeDate} → formats: ${dateWithHyphen}, ${dateWithSlash}, ${isoFormat}`);
+      const parts = String(rechargeDate).split(/[-\/]/);
+      if (parts.length === 3) {
+        const [dPart, mPart, yPart] = parts;
+        const dateWithHyphen = `${dPart}-${mPart}-${yPart}`;
+        const dateWithSlash = `${dPart}/${mPart}/${yPart}`;
+        const isoFormat = rechargeDate; // YYYY-MM-DD
+        console.log(`📅 Recharge Date filter: ${rechargeDate} → formats: ${dateWithHyphen}, ${dateWithSlash}, ${isoFormat}`);
 
-      query.$and.push({
-        rechargeDate: { $in: [dateWithHyphen, dateWithSlash, isoFormat] }
-      });
-      console.log(`🔍 Unpaid Query with rechargeDate filter applied`);
+        query.$and.push({
+          rechargeDate: { $in: [dateWithHyphen, dateWithSlash, isoFormat] }
+        });
+        console.log(`🔍 Unpaid Query with rechargeDate filter applied`);
+      }
     }
-
-    // No need to filter by user IDs from vouchers - query already filters by status='unpaid'
-    // Date filters will be applied below if needed
 
     // If unpaidDate filter is provided, match users who BECAME unpaid on that calendar day
     if (unpaidDate) {
-      const [yearStr, monthStr, dayStr] = String(unpaidDate).split('-');
-      const year = parseInt(yearStr, 10);
-      const month = parseInt(monthStr, 10) - 1; // JS Date month is 0-indexed
-      const day = parseInt(dayStr, 10);
+      const parts = String(unpaidDate).split(/[-\/]/);
+      if (parts.length === 3) {
+        let [dayVal, monthVal, yearVal] = parts;
+        // If first part is YYYY, it's ISO format YYYY-MM-DD, swap it to DD-MM-YYYY
+        if (dayVal.length === 4) { [yearVal, monthVal, dayVal] = [dayVal, monthVal, yearVal]; }
 
-      if (!Number.isNaN(year) && !Number.isNaN(month) && !Number.isNaN(day)) {
-        // Match strictly by Asia/Karachi local calendar day
-        const formatLocalYMD = (date) => {
-          try {
-            return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(date);
-          } catch (err) {
-            return date.toISOString().split('T')[0];
-          }
-        };
-        const normalizeToLocalYMD = (value) => {
-          if (!value) return null;
-          if (value instanceof Date) return formatLocalYMD(value);
-          if (typeof value === 'string') {
-            const str = value.trim();
-            if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
-            const parts = str.split(/[-\/]/);
-            if (parts.length === 3) {
-              let [a, b, c] = parts;
-              if (a.length === 4) return `${a}-${b.padStart(2, '0')}-${c.padStart(2, '0')}`;
-              // Convert DD-MM-YYYY or DD/MM/YYYY to YYYY-MM-DD
-              return `${c}-${b.padStart(2, '0')}-${a.padStart(2, '0')}`;
+        const year = parseInt(yearVal, 10);
+        const month = parseInt(monthVal, 10) - 1; // JS Date month is 0-indexed
+        const day = parseInt(dayVal, 10);
+
+        if (!Number.isNaN(year) && !Number.isNaN(month) && !Number.isNaN(day)) {
+          // Match strictly by Asia/Karachi local calendar day
+          const formatLocalYMD = (date) => {
+            try {
+              return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(date);
+            } catch (err) {
+              return date.toISOString().split('T')[0];
             }
+          };
+          const normalizeToLocalYMD = (value) => {
+            if (!value) return null;
+            if (value instanceof Date) return formatLocalYMD(value);
+            if (typeof value === 'string') {
+              const str = value.trim();
+              if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+              const parts = str.split(/[-\/]/);
+              if (parts.length === 3) {
+                let [a, b, c] = parts;
+                if (a.length === 4) return `${a}-${b.padStart(2, '0')}-${c.padStart(2, '0')}`;
+                // Convert DD-MM-YYYY or DD/MM/YYYY to YYYY-MM-DD
+                return `${c}-${b.padStart(2, '0')}-${a.padStart(2, '0')}`;
+              }
+            }
+            return null;
+          };
+          const matchesTargetDate = (value) => {
+            const local = normalizeToLocalYMD(value);
+            return local === unpaidDate;
+          };
+
+          // First, try to match by users.unpaidSince (most reliable going forward)
+          const unpaidSinceCandidates = await usersCollection.find({
+            status: 'unpaid',
+            $or: [
+              { serviceStatus: { $ne: 'inactive' } },
+              { serviceStatus: { $exists: false } }
+            ],
+            unpaidSince: { $exists: true }
+          }).project({ _id: 1, unpaidSince: 1 }).toArray();
+
+          const idsByUnpaidSince = unpaidSinceCandidates
+            .filter(u => matchesTargetDate(u.unpaidSince))
+            .map(u => u._id);
+
+          if (idsByUnpaidSince.length > 0) {
+            // CRITICAL: Add _id filter to $and array to combine with feeCollector/assignTo filters
+            query.$and.push({ _id: { $in: idsByUnpaidSince } });
+            console.log(`🔍 Unpaid users by unpaidSince=${unpaidDate}: ${idsByUnpaidSince.length}`);
+          } else {
+            // Fallback for older records: look at voucher months CREATED that day with unpaid status
+            const vouchers = await vouchersCollection.find({ 'months.status': 'unpaid' }).toArray();
+            const filtered = vouchers.filter((voucher) => {
+              const months = Array.isArray(voucher.months) ? voucher.months : [];
+              const unpaidMonths = months.filter(m => m && m.status === 'unpaid' && m.createdAt);
+              if (unpaidMonths.length === 0) return false;
+              // Find earliest createdAt among unpaid months
+              const earliest = unpaidMonths.reduce((min, m) => {
+                const d = new Date(m.createdAt);
+                return (!min || d < min) ? d : min;
+              }, null);
+              return earliest ? matchesTargetDate(earliest) : false;
+            });
+            const userIds = filtered.map(v => v.userId);
+            if (userIds.length === 0) {
+              return res.status(200).json({ success: true, data: [], totalCount: 0, page, limit });
+            }
+            const objectIds = userIds.map(id => new ObjectId(id));
+            // CRITICAL: Add _id filter to $and array to combine with feeCollector/assignTo filters
+            query.$and.push({ _id: { $in: objectIds } });
+            console.log(`🔍 Unpaid users by vouchers for unpaidDate=${unpaidDate}: ${userIds.length}`);
           }
-          return null;
-        };
-        const matchesTargetDate = (value) => {
-          const local = normalizeToLocalYMD(value);
-          return local === unpaidDate;
-        };
-
-        // First, try to match by users.unpaidSince (most reliable going forward)
-        const unpaidSinceCandidates = await usersCollection.find({
-          status: 'unpaid',
-          $or: [
-            { serviceStatus: { $ne: 'inactive' } },
-            { serviceStatus: { $exists: false } }
-          ],
-          unpaidSince: { $exists: true }
-        }).project({ _id: 1, unpaidSince: 1 }).toArray();
-
-        const idsByUnpaidSince = unpaidSinceCandidates
-          .filter(u => matchesTargetDate(u.unpaidSince))
-          .map(u => u._id);
-
-        if (idsByUnpaidSince.length > 0) {
-          // CRITICAL: Add _id filter to $and array to combine with feeCollector/assignTo filters
-          query.$and.push({ _id: { $in: idsByUnpaidSince } });
-          console.log(`🔍 Unpaid users by unpaidSince=${unpaidDate}: ${idsByUnpaidSince.length}`);
-        } else {
-          // Fallback for older records: look at voucher months CREATED that day with unpaid status
-          const vouchers = await vouchersCollection.find({ 'months.status': 'unpaid' }).toArray();
-          const filtered = vouchers.filter((voucher) => {
-            const months = Array.isArray(voucher.months) ? voucher.months : [];
-            const unpaidMonths = months.filter(m => m && m.status === 'unpaid' && m.createdAt);
-            if (unpaidMonths.length === 0) return false;
-            // Find earliest createdAt among unpaid months
-            const earliest = unpaidMonths.reduce((min, m) => {
-              const d = new Date(m.createdAt);
-              return (!min || d < min) ? d : min;
-            }, null);
-            return earliest ? matchesTargetDate(earliest) : false;
-          });
-          const userIds = filtered.map(v => v.userId);
-          if (userIds.length === 0) {
-            return res.status(200).json({ success: true, data: [], totalCount: 0, page, limit });
-          }
-          const objectIds = userIds.map(id => new ObjectId(id));
-          // CRITICAL: Add _id filter to $and array to combine with feeCollector/assignTo filters
-          query.$and.push({ _id: { $in: objectIds } });
-          console.log(`🔍 Unpaid users by vouchers for unpaidDate=${unpaidDate}: ${userIds.length}`);
         }
-      } else {
-        console.log(`⚠️ Invalid unpaidDate received: ${unpaidDate}`);
       }
-    }
-    // Else, if expiry date filter is provided, check both vouchers and users collections (legacy behavior)
-    else if (expiryDate) {
-      const [year, month, day] = expiryDate.split('-');
-      const dateWithHyphen = `${day}-${month}-${year}`;
-      const dateWithSlash = `${day}/${month}/${year}`;
-      const isoFormat = expiryDate; // YYYY-MM-DD
-      console.log(`📅 Date filter: ${expiryDate} → formats: ${dateWithHyphen}, ${dateWithSlash}, ${isoFormat}`);
+    } else if (expiryDate) {
+      const parts = String(expiryDate).split(/[-\/]/);
+      if (parts.length === 3) {
+        let [dPart, mPart, yPart] = parts;
+        // If first part is YYYY, it's ISO, swap back to get day/month/year
+        if (dPart.length === 4) { [yPart, mPart, dPart] = [dPart, mPart, yPart]; }
 
-      // Find vouchers with matching expiry date
-      const vouchers = await vouchersCollection.find({
-        expiryDate: { $in: [dateWithHyphen, dateWithSlash, isoFormat] }
-      }).toArray();
+        const dateWithHyphen = `${dPart.padStart(2, '0')}-${mPart.padStart(2, '0')}-${yPart}`;
+        const dateWithSlash = `${dPart.padStart(2, '0')}/${mPart.padStart(2, '0')}/${yPart}`;
+        const isoFormat = expiryDate; // YYYY-MM-DD
+        console.log(`📅 Date filter: ${expiryDate} → formats: ${dateWithHyphen}, ${dateWithSlash}, ${isoFormat}`);
 
-      const userIdsFromVouchers = vouchers.map(v => v.userId);
-      console.log(`📋 Found ${userIdsFromVouchers.length} vouchers with expiry date ${expiryDate}`);
-
-      // Also check users collection for expiryDate field directly
-      // This handles users who have expiryDate stored directly in their document
-      if (userIdsFromVouchers.length > 0) {
-        query.$and.push({
-          $or: [
-            { _id: { $in: userIdsFromVouchers.map(id => new ObjectId(id)) } },
-            { expiryDate: { $in: [dateWithHyphen, dateWithSlash, isoFormat] } }
-          ]
-        });
-      } else {
-        // No vouchers found, but check users collection directly
-        query.$and.push({
+        // Find vouchers with matching expiry date
+        const vouchers = await vouchersCollection.find({
           expiryDate: { $in: [dateWithHyphen, dateWithSlash, isoFormat] }
-        });
-      }
+        }).toArray();
 
-      console.log(`🔍 Unpaid Query with date filter:`, JSON.stringify(query, null, 2));
+        const userIdsFromVouchers = vouchers.map(v => v.userId);
+        console.log(`📋 Found ${userIdsFromVouchers.length} vouchers with expiry date ${expiryDate}`);
+
+        // Also check users collection for expiryDate field directly
+        // This handles users who have expiryDate stored directly in their document
+        if (userIdsFromVouchers.length > 0) {
+          query.$and.push({
+            $or: [
+              { _id: { $in: userIdsFromVouchers.map(id => new ObjectId(id)) } },
+              { expiryDate: { $in: [dateWithHyphen, dateWithSlash, isoFormat] } }
+            ]
+          });
+        } else {
+          // No vouchers found, but check users collection directly
+          query.$and.push({
+            expiryDate: { $in: [dateWithHyphen, dateWithSlash, isoFormat] }
+          });
+        }
+
+        console.log(`🔍 Unpaid Query with date filter:`, JSON.stringify(query, null, 2));
+      }
     }
 
     // CRITICAL: Exclude users expiring TODAY or TOMORROW (expiring soon users)
@@ -3876,36 +3991,42 @@ app.get('/api/balances', async (req, res) => {
 
     // If expiry date filter is provided, check both vouchers and users collections
     if (expiryDate) {
-      const [year, month, day] = expiryDate.split('-');
-      const dateWithHyphen = `${day}-${month}-${year}`;
-      const dateWithSlash = `${day}/${month}/${year}`;
-      const isoFormat = expiryDate; // YYYY-MM-DD
-      console.log(`📅 Balance users date filter: ${expiryDate} → formats: ${dateWithHyphen}, ${dateWithSlash}, ${isoFormat}`);
+      const parts = String(expiryDate).split(/[-\/]/);
+      if (parts.length === 3) {
+        let [dPart, mPart, yPart] = parts;
+        // If first part is YYYY, it's ISO, swap back to get day/month/year
+        if (dPart.length === 4) { [yPart, mPart, dPart] = [dPart, mPart, yPart]; }
 
-      // Find vouchers with matching expiry date
-      const vouchers = await vouchersCollection.find({
-        expiryDate: { $in: [dateWithHyphen, dateWithSlash, isoFormat] }
-      }).toArray();
+        const dateWithHyphen = `${dPart.padStart(2, '0')}-${mPart.padStart(2, '0')}-${yPart}`;
+        const dateWithSlash = `${dPart.padStart(2, '0')}/${mPart.padStart(2, '0')}/${yPart}`;
+        const isoFormat = expiryDate; // YYYY-MM-DD
+        console.log(`📅 Balance users date filter: ${expiryDate} → formats: ${dateWithHyphen}, ${dateWithSlash}, ${isoFormat}`);
 
-      const userIdsFromVouchers = vouchers.map(v => v.userId);
-      console.log(`📋 Found ${userIdsFromVouchers.length} vouchers with expiry date ${expiryDate}`);
-
-      // Also check users collection for expiryDate field directly
-      if (userIdsFromVouchers.length > 0) {
-        query.$and.push({
-          $or: [
-            { _id: { $in: userIdsFromVouchers.map(id => new ObjectId(id)) } },
-            { expiryDate: { $in: [dateWithHyphen, dateWithSlash, isoFormat] } }
-          ]
-        });
-      } else {
-        // No vouchers found, but check users collection directly
-        query.$and.push({
+        // Find vouchers with matching expiry date
+        const vouchers = await vouchersCollection.find({
           expiryDate: { $in: [dateWithHyphen, dateWithSlash, isoFormat] }
-        });
-      }
+        }).toArray();
 
-      console.log(`🔍 Balance Query with date filter:`, JSON.stringify(query, null, 2));
+        const userIdsFromVouchers = vouchers.map(v => v.userId);
+        console.log(`📋 Found ${userIdsFromVouchers.length} vouchers with expiry date ${expiryDate}`);
+
+        // Also check users collection for expiryDate field directly
+        if (userIdsFromVouchers.length > 0) {
+          query.$and.push({
+            $or: [
+              { _id: { $in: userIdsFromVouchers.map(id => new ObjectId(id)) } },
+              { expiryDate: { $in: [dateWithHyphen, dateWithSlash, isoFormat] } }
+            ]
+          });
+        } else {
+          // No vouchers found, but check users collection directly
+          query.$and.push({
+            expiryDate: { $in: [dateWithHyphen, dateWithSlash, isoFormat] }
+          });
+        }
+
+        console.log(`🔍 Balance Query with date filter:`, JSON.stringify(query, null, 2));
+      }
     }
 
     const totalCount = await usersCollection.countDocuments(query);
@@ -5691,15 +5812,19 @@ const checkTomorrowExpiringUsers = async () => {
       if (!exp) return null;
       if (exp instanceof Date) return toPKT_YMD(exp);
       if (typeof exp === 'string') {
-        const parts = exp.split('-');
-        if (parts.length === 3) {
-          const d = parseInt(parts[0], 10);
-          const m = parseInt(parts[1], 10) - 1;
-          const y = parseInt(parts[2], 10);
-          if (!isNaN(d) && !isNaN(m) && !isNaN(y)) {
-            const dt = new Date(Date.UTC(y, m, d));
-            return toPKT_YMD(dt);
-          }
+        const m1 = exp.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/); // DD-MM-YYYY or DD/MM/YYYY
+        if (m1) {
+          const d = parseInt(m1[1], 10);
+          const m = parseInt(m1[2], 10) - 1;
+          const y = parseInt(m1[3], 10);
+          return toPKT_YMD(new Date(Date.UTC(y, m, d)));
+        }
+        const m2 = exp.match(/^(\d{4})-(\d{2})-(\d{2})/); // ISO-like
+        if (m2) {
+          const y = parseInt(m2[1], 10);
+          const m = parseInt(m2[2], 10) - 1;
+          const d = parseInt(m2[3], 10);
+          return toPKT_YMD(new Date(Date.UTC(y, m, d)));
         }
         const d2 = new Date(exp);
         if (!isNaN(d2.getTime())) return toPKT_YMD(d2);
@@ -5837,16 +5962,19 @@ const moveTodayExpiredToUnpaid = async () => {
       if (!exp) return null;
       if (exp instanceof Date) return toPKT_YMD(exp);
       if (typeof exp === 'string') {
-        const parts = exp.split(/[-\/]/);
-        if (parts.length === 3) {
-          const [dd, mm, yyyy] = parts;
-          const d = parseInt(dd, 10);
-          const m = parseInt(mm, 10) - 1;
-          const y = parseInt(yyyy, 10);
-          if (!isNaN(d) && !isNaN(m) && !isNaN(y)) {
-            const dt = new Date(Date.UTC(y, m, d));
-            return toPKT_YMD(dt);
-          }
+        const m1 = exp.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/); // DD-MM-YYYY or DD/MM/YYYY
+        if (m1) {
+          const d = parseInt(m1[1], 10);
+          const m = parseInt(m1[2], 10) - 1;
+          const y = parseInt(m1[3], 10);
+          return toPKT_YMD(new Date(Date.UTC(y, m, d)));
+        }
+        const m2 = exp.match(/^(\d{4})-(\d{2})-(\d{2})/); // ISO-like
+        if (m2) {
+          const y = parseInt(m2[1], 10);
+          const m = parseInt(m2[2], 10) - 1;
+          const d = parseInt(m2[3], 10);
+          return toPKT_YMD(new Date(Date.UTC(y, m, d)));
         }
         const d2 = new Date(exp);
         if (!isNaN(d2.getTime())) return toPKT_YMD(d2);
@@ -5877,13 +6005,9 @@ const moveTodayExpiredToUnpaid = async () => {
 
         // Parse expiry date (DD-MM-YYYY or DD/MM/YYYY)
         const parseDate = (dateStr) => {
-          const parts = dateStr.split(/[-\/]/);
-          if (parts.length === 3) {
-            const day = parseInt(parts[0], 10);
-            const month = parseInt(parts[1], 10) - 1;
-            const year = parseInt(parts[2], 10);
-            return new Date(year, month, day);
-          }
+          if (!dateStr) return new Date();
+          const m1 = dateStr.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+          if (m1) return new Date(parseInt(m1[3], 10), parseInt(m1[2], 10) - 1, parseInt(m1[1], 10));
           return new Date(dateStr);
         };
 
@@ -9356,93 +9480,6 @@ app.post('/api/incomes/sync', ensureDbConnection, async (req, res) => {
       message: 'Error syncing incomes',
       error: error.message
     });
-  }
-});
-
-// Loan API Routes
-// GET - Fetch all loans
-app.get('/api/loans', ensureDbConnection, async (req, res) => {
-  try {
-    const loans = await loansCollection.find({}).sort({ date: -1 }).toArray();
-
-    // Calculate totals
-    const totalTaken = loans
-      .filter(l => l.type === 'taken')
-      .reduce((sum, l) => sum + (Number(l.amount) || 0), 0);
-
-    const totalGiven = loans
-      .filter(l => l.type === 'given')
-      .reduce((sum, l) => sum + (Number(l.amount) || 0), 0);
-
-    res.status(200).json({
-      success: true,
-      data: loans,
-      totals: {
-        taken: totalTaken,
-        given: totalGiven,
-        net: totalTaken - totalGiven
-      }
-    });
-  } catch (error) {
-    console.error('❌ Error fetching loans:', error);
-    res.status(500).json({ success: false, message: 'Error fetching loans' });
-  }
-});
-
-// POST - Add or update a loan
-app.post('/api/loans', ensureDbConnection, async (req, res) => {
-  try {
-    const { id, type, person, amount, description, date } = req.body;
-
-    if (!type || !person || !amount) {
-      return res.status(400).json({ success: false, message: 'Type, person and amount are required' });
-    }
-
-    const loanData = {
-      type, // 'taken' or 'given'
-      person,
-      amount: Number(amount),
-      description: description || '',
-      date: date ? new Date(date) : new Date(),
-      updatedAt: new Date()
-    };
-
-    if (id) {
-      // Update existing
-      const { ObjectId } = require('mongodb');
-      await loansCollection.updateOne(
-        { _id: new ObjectId(id) },
-        { $set: loanData }
-      );
-      res.status(200).json({ success: true, message: 'Loan updated successfully' });
-    } else {
-      // Add new
-      loanData.createdAt = new Date();
-      await loansCollection.insertOne(loanData);
-      res.status(201).json({ success: true, message: 'Loan added successfully' });
-    }
-  } catch (error) {
-    console.error('❌ Error saving loan:', error);
-    res.status(500).json({ success: false, message: 'Error saving loan' });
-  }
-});
-
-// DELETE - Remove a loan
-app.delete('/api/loans/:id', ensureDbConnection, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { ObjectId } = require('mongodb');
-
-    const result = await loansCollection.deleteOne({ _id: new ObjectId(id) });
-
-    if (result.deletedCount === 0) {
-      return res.status(404).json({ success: false, message: 'Loan not found' });
-    }
-
-    res.status(200).json({ success: true, message: 'Loan deleted successfully' });
-  } catch (error) {
-    console.error('❌ Error deleting loan:', error);
-    res.status(500).json({ success: false, message: 'Error deleting loan' });
   }
 });
 
