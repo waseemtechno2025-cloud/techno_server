@@ -9001,6 +9001,58 @@ app.get('/api/incomes/:name', ensureDbConnection, async (req, res) => {
   }
 });
 
+// POST /api/incomes/reset - Reset Admin's cashIncome and bankIncome to 0
+// Called by frontend on month change or manual reset from settings
+app.post('/api/incomes/reset', ensureDbConnection, async (req, res) => {
+  try {
+    const { resetMonth } = req.body; // e.g. "March 2026"
+    console.log(`🔄 Income reset requested for month: ${resetMonth || 'manual'}`);
+
+    const adminIncome = await incomesCollection.findOne({
+      name: { $regex: new RegExp(`^Admin$`, 'i') }
+    });
+
+    const previousCash = adminIncome?.cashIncome || 0;
+    const previousBank = adminIncome?.bankIncome || 0;
+
+    if (adminIncome) {
+      await incomesCollection.updateOne(
+        { name: { $regex: new RegExp(`^Admin$`, 'i') } },
+        {
+          $set: {
+            cashIncome: 0,
+            bankIncome: 0,
+            lastResetAt: new Date(),
+            lastResetMonth: resetMonth || null,
+            lastUpdated: new Date()
+          }
+        }
+      );
+    } else {
+      await incomesCollection.insertOne({
+        name: 'Admin',
+        cashIncome: 0,
+        bankIncome: 0,
+        lastResetAt: new Date(),
+        lastResetMonth: resetMonth || null,
+        createdAt: new Date(),
+        lastUpdated: new Date()
+      });
+    }
+
+    console.log(`✅ Admin income reset: Cash ${previousCash} → 0, Bank ${previousBank} → 0`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Admin income reset successfully',
+      data: { previousCash, previousBank }
+    });
+  } catch (error) {
+    console.error('Error resetting income:', error);
+    res.status(500).json({ success: false, message: 'Failed to reset income', error: error.message });
+  }
+});
+
 // GET Admin Overall Income Report (with date range filter)
 // This calculates:
 // 1. Total transferred from fee collectors to Admin (from collections)
