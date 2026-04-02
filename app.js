@@ -246,6 +246,37 @@ app.delete('/api/loans/:id', ensureDbConnection, async (req, res) => {
   }
 });
 
+app.put('/api/loans/:id', ensureDbConnection, async (req, res) => {
+  try {
+    const { type, personName, amount, description, date } = req.body;
+    if (!type || !personName || !amount) {
+      return res.status(400).json({ success: false, message: 'Missing required fields' });
+    }
+
+    const updatedRecord = {
+      type,
+      personName,
+      amount: parseFloat(amount),
+      description: description || '',
+      date: date ? new Date(date) : new Date()
+    };
+
+    const result = await loansCollection.updateOne(
+      { _id: new ObjectId(req.params.id) },
+      { $set: updatedRecord }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ success: false, message: 'Loan record not found' });
+    }
+
+    res.status(200).json({ success: true, data: { _id: req.params.id, ...updatedRecord } });
+  } catch (error) {
+    console.error('Error updating loan:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
+
 // POST /api/auth/login
 app.post('/api/auth/login', async (req, res) => {
   try {
