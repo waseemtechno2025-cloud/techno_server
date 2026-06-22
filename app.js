@@ -8224,102 +8224,10 @@ app.get('/api/collections/all-employee-stats', ensureDbConnection, async (req, r
   }
 });
 
-// ============ CRON JOB ENDPOINT ============
-// Reset all income at month end - To be called by cronjob.org
-// This endpoint should be called daily, but will only reset on the last day of month
-app.post('/api/cron/reset-monthly-income', ensureDbConnection, async (req, res) => {
-  try {
-    console.log('🔄 ===== MONTHLY INCOME RESET CRON JOB TRIGGERED =====');
-    console.log('📅 Triggered at:', new Date().toISOString());
-
-    // Get current date in Pakistan timezone
-    const nowUTC = new Date();
-    const pktDate = new Date(nowUTC.getTime() + (PKT_OFFSET_MIN * 60000));
-
-    const currentDay = pktDate.getDate();
-    const currentMonth = pktDate.getMonth();
-    const currentYear = pktDate.getFullYear();
-
-    // Get the last day of current month
-    const lastDayOfMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
-
-    console.log(`📅 Current PKT Date: ${pktDate.toISOString().split('T')[0]}`);
-    console.log(`📅 Current Day: ${currentDay}, Last Day of Month: ${lastDayOfMonth}`);
-
-    // Check if today is the last day of the month
-    if (currentDay !== lastDayOfMonth) {
-      console.log(`⏭️ Not the last day of month. Skipping reset. (Day ${currentDay}/${lastDayOfMonth})`);
-      console.log('🔄 ===== CRON JOB ENDED - NO ACTION TAKEN =====\n');
-
-      return res.status(200).json({
-        success: true,
-        message: 'Not the last day of month - reset skipped',
-        data: {
-          currentDay: currentDay,
-          lastDayOfMonth: lastDayOfMonth,
-          currentDate: pktDate.toISOString().split('T')[0],
-          resetSkipped: true
-        }
-      });
-    }
-
-    console.log('✅ Last day of month confirmed - Proceeding with reset...');
-    const incomesCollection = db.collection('incomes');
-
-    // Get current state before reset
-    const allIncomes = await incomesCollection.find({}).toArray();
-    console.log(`📊 Found ${allIncomes.length} income records to reset`);
-
-    // Log current totals
-    let totalCashBeforeReset = 0;
-    let totalBankBeforeReset = 0;
-    allIncomes.forEach(income => {
-      totalCashBeforeReset += income.cashIncome || 0;
-      totalBankBeforeReset += income.bankIncome || 0;
-      console.log(`   👤 ${income.name}: Cash Rs ${income.cashIncome || 0}, Bank Rs ${income.bankIncome || 0}`);
-    });
-
-    console.log(`💰 Total Cash Income before reset: Rs ${totalCashBeforeReset}`);
-    console.log(`🏦 Total Bank Income before reset: Rs ${totalBankBeforeReset}`);
-
-    // Reset all cashIncome and bankIncome to 0
-    const result = await incomesCollection.updateMany(
-      {}, // Match all documents
-      {
-        $set: {
-          cashIncome: 0,
-          bankIncome: 0,
-          lastResetDate: new Date(),
-          lastResetMonth: new Date().getMonth() + 1,
-          lastResetYear: new Date().getFullYear()
-        }
-      }
-    );
-
-    console.log(`✅ Reset completed: ${result.modifiedCount} records updated`);
-    console.log('🔄 ===== MONTHLY INCOME RESET CRON JOB COMPLETED =====\n');
-
-    res.status(200).json({
-      success: true,
-      message: 'Monthly income reset completed successfully',
-      data: {
-        recordsReset: result.modifiedCount,
-        totalCashReset: totalCashBeforeReset,
-        totalBankReset: totalBankBeforeReset,
-        resetDate: new Date().toISOString(),
-        resetMonth: new Date().getMonth() + 1,
-        resetYear: new Date().getFullYear()
-      }
-    });
-  } catch (error) {
-    console.error('❌ Error resetting monthly income:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error resetting monthly income',
-      error: error.message
-    });
-  }
-});
+// ============ CRON JOB ENDPOINT (REMOVED) ============
+// NOTE: Automatic monthly income reset via cron has been REMOVED.
+// Income reset is now MANUAL ONLY — use the "Reset Income" button in Settings > Admin Tools.
+// The manual reset endpoint is: POST /api/incomes/reset
 
 // Start server (only in development, not in Vercel)
 if (!process.env.VERCEL) {
@@ -9033,7 +8941,7 @@ app.get('/api/incomes/:name', ensureDbConnection, async (req, res) => {
 });
 
 // POST /api/incomes/reset - Reset Admin's cashIncome and bankIncome to 0
-// Called by frontend on month change or manual reset from settings
+// MANUAL ONLY - called from Settings > Admin Tools > Reset Income button
 app.post('/api/incomes/reset', ensureDbConnection, async (req, res) => {
   try {
     const { resetMonth } = req.body; // e.g. "March 2026"
