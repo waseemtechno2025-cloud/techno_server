@@ -8753,6 +8753,9 @@ app.get('/api/collections/transfers/history', ensureDbConnection, async (req, re
 app.get('/api/collections/history/:feeCollector', ensureDbConnection, async (req, res) => {
   try {
     const feeCollectorName = req.params.feeCollector;
+    const page = req.query.page ? parseInt(req.query.page) : null;
+    const limit = req.query.limit ? parseInt(req.query.limit) : 20;
+    const search = req.query.search ? req.query.search.trim() : '';
 
     if (!feeCollectorName) {
       return res.status(400).json({
@@ -8761,93 +8764,80 @@ app.get('/api/collections/history/:feeCollector', ensureDbConnection, async (req
       });
     }
 
-    console.log(`📜 Fetching collection history for: ${feeCollectorName}`);
+    console.log(`📜 Fetching collection history for: ${feeCollectorName} (Page: ${page || 'All'}, Limit: ${limit})`);
 
     const vouchersCollection = db.collection('vouchers');
+    const feeCollectorLower = feeCollectorName.toLowerCase().trim();
 
-    // Get all vouchers
-    const allVouchers = await vouchersCollection.find({}).toArray();
-    console.log(`📜 Found ${allVouchers.length} total vouchers`);
+    // Query vouchers matching receivedBy in months, paymentHistory, or root level
+    const escapedName = feeCollectorLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const nameRegex = new RegExp(`^${escapedName}$`, 'i');
 
-    const collectionHistory = [];
+    const matchingVouchers = await vouchersCollection.find({
+      $or: [
+        { 'months.receivedBy': nameRegex },
+        { 'months.paymentHistory.receivedBy': nameRegex },
+        { 'paymentHistory.receivedBy': nameRegex },
+        { 'receivedBy': nameRegex }
+      ]
+    }).toArray();
 
-    let sampleLogged = false;
+    let collectionHistory = [];
 
-    // Process vouchers to find payments received by this fee collector
-    allVouchers.forEach(voucher => {
-      // Try multiple fields to get user name
-      const userName = voucher.userName || voucher.name || voucher.user || 'Unknown';
+    // Process matching vouchers to extract individual payment items
+    matchingVouchers.forEach(voucher => {
+      const userName = voucher.userName || voucher.name || voucher.user || 'Unknown Customer';
 
-      // Handle multi-month vouchers
+      // Multi-month vouchers
       if (voucher.months && Array.isArray(voucher.months)) {
         voucher.months.forEach(month => {
-          // ONLY include fully paid status - NO partial payments
-          if (month.status === 'paid' && month.receivedBy) {
+          if (['paid', 'partial'].includes(month.status) && month.receivedBy) {
             const receivedByLower = month.receivedBy.toLowerCase().trim();
-            const feeCollectorLower = feeCollectorName.toLowerCase().trim();
-
-            // STRICT: Exclude "Myself" - only show explicit fee collector matches
-            if (receivedByLower === 'myself') {
-              return; // Skip Myself payments
-            }
-
-            if (receivedByLower === feeCollectorLower) {
+            if (receivedByLower !== 'myself' && receivedByLower === feeCollectorLower) {
               const paidAmount = Number(month.paidAmount || 0);
               if (paidAmount > 0) {
                 collectionHistory.push({
                   userName: userName,
                   amount: paidAmount,
-                  date: month.paymentDate || month.paidDate || new Date(),
+                  date: month.paymentDate || month.paidDate || month.date || month.createdAt || voucher.createdAt || new Date(),
                   paymentMethod: month.paymentMethod || 'Cash',
-                  month: month.month
+                  month: month.month || 'Unknown Month'
                 });
               }
             }
           }
         });
       }
-      // Handle old single-month vouchers
-      else if (voucher.status === 'paid') {
-        // Check receivedBy field
+      // Single-month vouchers
+      else if (['paid', 'partial'].includes(voucher.status)) {
         const receivedBy = voucher.receivedBy || '';
         const receivedByLower = receivedBy.toLowerCase().trim();
-        const feeCollectorLower = feeCollectorName.toLowerCase().trim();
-
-        // STRICT: Only match if receivedBy explicitly matches fee collector name
-        // No fallback for "Myself" or empty receivedBy - must be explicit match
-        if (receivedByLower === feeCollectorLower) {
+        if (receivedByLower !== 'myself' && receivedByLower === feeCollectorLower) {
           const paidAmount = Number(voucher.paidAmount || 0);
           if (paidAmount > 0) {
             collectionHistory.push({
               userName: userName,
               amount: paidAmount,
-              date: voucher.paymentDate || voucher.paidDate || new Date(),
+              date: voucher.paymentDate || voucher.paidDate || voucher.date || voucher.createdAt || new Date(),
               paymentMethod: voucher.paymentMethod || 'Cash'
             });
           }
         }
       }
 
-      // Check payment history in multi-month vouchers
+      // Check paymentHistory array
       if (voucher.paymentHistory && Array.isArray(voucher.paymentHistory)) {
         voucher.paymentHistory.forEach(payment => {
           const receivedByLower = (payment.receivedBy || '').toLowerCase().trim();
-          const feeCollectorLower = feeCollectorName.toLowerCase().trim();
-
-          // STRICT: Exclude "Myself" - only show explicit fee collector matches
-          if (receivedByLower === 'myself') {
-            return; // Skip Myself payments
-          }
-
-          if (receivedByLower === feeCollectorLower) {
+          if (receivedByLower !== 'myself' && receivedByLower === feeCollectorLower) {
             const paidAmount = Number(payment.amount || 0);
             if (paidAmount > 0) {
               collectionHistory.push({
                 userName: userName,
                 amount: paidAmount,
-                date: payment.date || new Date(),
+                date: payment.date || voucher.createdAt || new Date(),
                 paymentMethod: payment.paymentMethod || 'Cash',
-                month: payment.month
+                month: payment.month || 'Unknown Month'
               });
             }
           }
@@ -8855,27 +8845,46 @@ app.get('/api/collections/history/:feeCollector', ensureDbConnection, async (req
       }
     });
 
-    // Sort by date (most recent first)
-    collectionHistory.sort((a, b) => {
-      const dateA = new Date(a.date);
-      const dateB = new Date(b.date);
-      return dateB.getTime() - dateA.getTime();
+    // Deduplicate records to avoid identical entries
+    const uniqueRecordsMap = new Map();
+    collectionHistory.forEach(rec => {
+      const dateStr = rec.date ? new Date(rec.date).toISOString().split('T')[0] : '';
+      const key = `${rec.userName}_${rec.month || ''}_${rec.amount}_${dateStr}`;
+      if (!uniqueRecordsMap.has(key)) {
+        uniqueRecordsMap.set(key, rec);
+      }
     });
+    collectionHistory = Array.from(uniqueRecordsMap.values());
 
-    console.log(`✅ Found ${collectionHistory.length} collection records for ${feeCollectorName}`);
+    // Search filter
+    if (search) {
+      const sRegex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      collectionHistory = collectionHistory.filter(r => sRegex.test(r.userName));
+    }
 
-    // Log sample data for debugging
-    if (collectionHistory.length > 0) {
-      console.log('📝 Sample collection record:', {
-        userName: collectionHistory[0].userName,
-        amount: collectionHistory[0].amount,
-        paymentMethod: collectionHistory[0].paymentMethod
-      });
+    // Sort descending by date
+    collectionHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    const totalCount = collectionHistory.length;
+    const totalAmount = collectionHistory.reduce((sum, r) => sum + r.amount, 0);
+
+    let resultData = collectionHistory;
+    let hasMore = false;
+
+    if (page !== null && page > 0) {
+      const skip = (page - 1) * limit;
+      resultData = collectionHistory.slice(skip, skip + limit);
+      hasMore = skip + limit < totalCount;
     }
 
     res.status(200).json({
       success: true,
-      data: collectionHistory
+      data: resultData,
+      totalCount,
+      totalAmount,
+      page: page || 1,
+      limit: limit,
+      hasMore
     });
   } catch (error) {
     console.error('❌ Error fetching collection history:', error);
