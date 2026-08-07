@@ -8787,21 +8787,24 @@ app.get('/api/collections/history/:feeCollector', ensureDbConnection, async (req
     // Process matching vouchers to extract individual payment items
     matchingVouchers.forEach(voucher => {
       const userName = voucher.userName || voucher.name || voucher.user || 'Unknown Customer';
+      const voucherId = voucher._id ? voucher._id.toString() : '';
 
       // Multi-month vouchers
       if (voucher.months && Array.isArray(voucher.months)) {
         voucher.months.forEach(month => {
-          if (['paid', 'partial'].includes(month.status) && month.receivedBy) {
+          if (['paid', 'partial'].includes(month.status) && month.receivedBy && !month.isSettled) {
             const receivedByLower = month.receivedBy.toLowerCase().trim();
             if (receivedByLower !== 'myself' && receivedByLower === feeCollectorLower) {
               const paidAmount = Number(month.paidAmount || 0);
               if (paidAmount > 0) {
                 collectionHistory.push({
+                  voucherId,
                   userName: userName,
                   amount: paidAmount,
                   date: month.paymentDate || month.paidDate || month.date || month.createdAt || voucher.createdAt || new Date(),
                   paymentMethod: month.paymentMethod || 'Cash',
-                  month: month.month || 'Unknown Month'
+                  month: month.month || 'Unknown Month',
+                  isSettled: false
                 });
               }
             }
@@ -8809,17 +8812,19 @@ app.get('/api/collections/history/:feeCollector', ensureDbConnection, async (req
         });
       }
       // Single-month vouchers
-      else if (['paid', 'partial'].includes(voucher.status)) {
+      else if (['paid', 'partial'].includes(voucher.status) && !voucher.isSettled) {
         const receivedBy = voucher.receivedBy || '';
         const receivedByLower = receivedBy.toLowerCase().trim();
         if (receivedByLower !== 'myself' && receivedByLower === feeCollectorLower) {
           const paidAmount = Number(voucher.paidAmount || 0);
           if (paidAmount > 0) {
             collectionHistory.push({
+              voucherId,
               userName: userName,
               amount: paidAmount,
               date: voucher.paymentDate || voucher.paidDate || voucher.date || voucher.createdAt || new Date(),
-              paymentMethod: voucher.paymentMethod || 'Cash'
+              paymentMethod: voucher.paymentMethod || 'Cash',
+              isSettled: false
             });
           }
         }
@@ -8828,16 +8833,19 @@ app.get('/api/collections/history/:feeCollector', ensureDbConnection, async (req
       // Check paymentHistory array
       if (voucher.paymentHistory && Array.isArray(voucher.paymentHistory)) {
         voucher.paymentHistory.forEach(payment => {
+          if (payment.isSettled) return;
           const receivedByLower = (payment.receivedBy || '').toLowerCase().trim();
           if (receivedByLower !== 'myself' && receivedByLower === feeCollectorLower) {
             const paidAmount = Number(payment.amount || 0);
             if (paidAmount > 0) {
               collectionHistory.push({
+                voucherId,
                 userName: userName,
                 amount: paidAmount,
                 date: payment.date || voucher.createdAt || new Date(),
                 paymentMethod: payment.paymentMethod || 'Cash',
-                month: payment.month || 'Unknown Month'
+                month: payment.month || 'Unknown Month',
+                isSettled: false
               });
             }
           }
@@ -8849,7 +8857,7 @@ app.get('/api/collections/history/:feeCollector', ensureDbConnection, async (req
     const uniqueRecordsMap = new Map();
     collectionHistory.forEach(rec => {
       const dateStr = rec.date ? new Date(rec.date).toISOString().split('T')[0] : '';
-      const key = `${rec.userName}_${rec.month || ''}_${rec.amount}_${dateStr}`;
+      const key = `${rec.voucherId}_${rec.userName}_${rec.month || ''}_${rec.amount}_${dateStr}`;
       if (!uniqueRecordsMap.has(key)) {
         uniqueRecordsMap.set(key, rec);
       }
@@ -8893,6 +8901,100 @@ app.get('/api/collections/history/:feeCollector', ensureDbConnection, async (req
       message: 'Error fetching collection history',
       error: error.message
     });
+  }
+});
+
+// POST - Settle individual customer payment (Mark as paid/transferred to Admin by Technician)
+app.post('/api/collections/settle-payment', ensureDbConnection, async (req, res) => {
+  try {
+    const { feeCollector, voucherId, month, userName, amount } = req.body;
+
+    if (!feeCollector || !amount || Number(amount) <= 0) {
+      return res.status(400).json({ success: false, message: 'feeCollector and valid amount are required' });
+    }
+
+    console.log(`🤝 Settling payment: ${userName || 'Customer'} (Rs ${amount}) by ${feeCollector}`);
+
+    const vouchersCollection = db.collection('vouchers');
+    const incomesCollection = db.collection('incomes');
+    const collectionsCollection = db.collection('collections');
+    const transactionsCollection = db.collection('transactions');
+
+    const feeCollectorTrimmed = feeCollector.trim();
+    const settleAmount = Number(amount);
+
+    // 1. If voucherId & month provided, mark as settled in voucher
+    if (voucherId && ObjectId.isValid(voucherId)) {
+      const vObjectId = new ObjectId(voucherId);
+      const voucher = await vouchersCollection.findOne({ _id: vObjectId });
+
+      if (voucher) {
+        if (voucher.months && Array.isArray(voucher.months)) {
+          const updatedMonths = voucher.months.map(m => {
+            if (!month || m.month === month) {
+              return { ...m, isSettled: true, settledAt: new Date(), settledBy: feeCollectorTrimmed };
+            }
+            return m;
+          });
+
+          await vouchersCollection.updateOne(
+            { _id: vObjectId },
+            { $set: { months: updatedMonths, updatedAt: new Date() } }
+          );
+        } else {
+          await vouchersCollection.updateOne(
+            { _id: vObjectId },
+            { $set: { isSettled: true, settledAt: new Date(), settledBy: feeCollectorTrimmed, updatedAt: new Date() } }
+          );
+        }
+      }
+    }
+
+    // 2. Transfer cash income from Fee Collector / Technician to Admin
+    const collectorRegex = new RegExp(`^${feeCollectorTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+
+    await incomesCollection.updateOne(
+      { name: collectorRegex },
+      { $inc: { cashIncome: -settleAmount }, $set: { lastUpdated: new Date() } }
+    );
+
+    await incomesCollection.updateOne(
+      { name: { $regex: new RegExp(`^Admin$`, 'i') } },
+      { $inc: { cashIncome: settleAmount }, $set: { lastUpdated: new Date() } },
+      { upsert: true }
+    );
+
+    // 3. Save transfer record in collections
+    const transferRecord = {
+      feeCollector: feeCollectorTrimmed,
+      amount: settleAmount,
+      message: `Fee paid to Admin for customer ${userName || 'Customer'}${month ? ` (${month})` : ''}`,
+      date: new Date(),
+      createdAt: new Date(),
+      settledVoucherId: voucherId || null,
+      settledMonth: month || null
+    };
+    await collectionsCollection.insertOne(transferRecord);
+
+    // 4. Save transaction log
+    await transactionsCollection.insertOne({
+      type: 'transfer',
+      feeCollector: feeCollectorTrimmed,
+      amount: settleAmount,
+      description: `Settled payment for ${userName || 'Customer'}`,
+      date: new Date(),
+      createdAt: new Date()
+    });
+
+    console.log(`✅ Payment settled successfully for ${userName} by ${feeCollectorTrimmed}`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Payment marked as paid and transferred to Admin'
+    });
+  } catch (error) {
+    console.error('❌ Error settling payment:', error);
+    res.status(500).json({ success: false, message: 'Error settling payment', error: error.message });
   }
 });
 
